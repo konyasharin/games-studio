@@ -57,7 +57,7 @@ that one again (at most twice), and say so in the log.
      setTimeout(() => res({ ok: false, error: 'timeout' }), 20000)
    })
    // for each new image element img: const b = await (await fetch(img.src)).blob(); await send(b, i, side)
-   // the message must carry the side: { ..., view: 'front'|'back'|'left'|'right' }
+   // the message carries the side (view) and PROMPT = the full text typed into Flow for that image, side wording included
    ```
    Check every ack is `ok`; close the receiver tab afterwards (`rx.close()`).
 4. Complete with status "done", `cardPatch: {"prompt": "<the prompt you used>"}` if the card's prompt was empty.

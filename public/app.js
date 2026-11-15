@@ -493,21 +493,43 @@ async function boardPage(view, pid, bid, tok) {
   const pick = (c, v) => { const side = viewOf(v); const picks = { ...picksOf(c), [side]: v.file }; patch(c, side === 'front' || side === 'sheet' ? { picks, chosen: v.file } : { picks }) }
   const sideIcon = side => h('span', { class: 'side-ic side-' + side, title: SIDE[side].name }, SIDE[side].short)
 
-  function lightbox(c, v) {
-    const side = viewOf(v), picked = picksOf(c)[side] === v.file
-    openModal(h('div', { class: 'lightbox' }, h('img', { src: fileUrl(v.file) }),
-      h('div', { class: 'row' }, sideIcon(side), h('span', { class: 'more' }, SIDE[side].name),
-        h('button', { class: 'btn primary', onclick: () => { closeModal(); pick(c, v) } }, picked ? 'Выбрано' : side === 'front' || side === 'sheet' ? 'Сделать главным' : `Выбрать для вида «${SIDE[side].name.toLowerCase()}»`),
-        h('div', { class: 'seg', title: 'Какая это сторона (поправь, если определилась неверно)' }, ...[...SIDES.map(x => x[0]), 'sheet'].map(k => h('button', { class: k === side ? 'on' : '', onclick: () => { closeModal(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, view: k }).then(refresh).catch(() => {}) } }, SIDE[k].short))),
-        h('a', { class: 'btn', href: fileUrl(v.file), target: '_blank' }, 'Открыть файл'),
-        h('button', { class: 'btn ghost', onclick: closeModal }, 'Закрыть'))))
+  // fullscreen view; `list` = the pictures to page through (the card's chosen sides, or its variants)
+  function lightbox(c, v, list) {
+    const vars = (c.variants || []).filter(x => !x.hidden)
+    const seq = (list && list.length ? list : [v]).map(x => vars.find(y => y.file === x.file) || x)
+    let i = Math.max(0, seq.findIndex(x => x.file === v.file))
+    const box = h('div', { class: 'lightbox' })
+    const show = () => {
+      const cur = seq[i], side = viewOf(cur), picked = picksOf(c)[side] === cur.file
+      box.innerHTML = ''
+      const nav = seq.length > 1 ? h('div', { class: 'lb-sides' }, ...seq.map((x, k) => h('button', { class: k === i ? 'on' : '', onclick: () => { i = k; show() } }, sideIcon(viewOf(x)), ' ', SIDE[viewOf(x)].name))) : null
+      box.append(nav || '', h('div', { class: 'lb-img' },
+        seq.length > 1 ? h('button', { class: 'lb-arrow l', title: '←', onclick: () => { i = (i - 1 + seq.length) % seq.length; show() } }, '‹') : '',
+        h('img', { src: fileUrl(cur.file) }),
+        seq.length > 1 ? h('button', { class: 'lb-arrow r', title: '→', onclick: () => { i = (i + 1) % seq.length; show() } }, '›') : ''),
+        h('div', { class: 'row lb-bar' }, sideIcon(side), h('span', { class: 'more' }, SIDE[side].name),
+          h('button', { class: 'btn primary', disabled: picked, onclick: () => { closeModal(); pick(c, cur) } }, picked ? (side === 'front' || side === 'sheet' ? 'Главный вид' : 'Выбран для этой стороны') : side === 'front' || side === 'sheet' ? 'Сделать главным' : `Выбрать для вида «${SIDE[side].name.toLowerCase()}»`),
+          h('div', { class: 'seg', title: 'Какая это сторона (поправь, если определилась неверно)' }, ...[...SIDES.map(x => x[0]), 'sheet'].map(k => h('button', { class: k === side ? 'on' : '', onclick: () => { closeModal(); api('POST', `${base}/cards/${c.id}/variant`, { file: cur.file, view: k }).then(refresh).catch(() => {}) } }, SIDE[k].short))),
+          h('a', { class: 'btn', href: fileUrl(cur.file), target: '_blank' }, 'Открыть файл'),
+          h('button', { class: 'btn ghost', onclick: closeModal }, 'Закрыть')),
+        cur.prompt ? h('details', { class: 'lb-prompt' }, h('summary', {}, 'Промпт, с которым сделана картинка'), h('div', {}, cur.prompt)) : '')
+    }
+    const key = e => {
+      if (e.key === 'ArrowRight' && seq.length > 1) { i = (i + 1) % seq.length; show() }
+      if (e.key === 'ArrowLeft' && seq.length > 1) { i = (i - 1 + seq.length) % seq.length; show() }
+    }
+    document.addEventListener('keydown', key)
+    show()
+    openModal(box, () => document.removeEventListener('keydown', key))
   }
+  // the chosen picture of every side, front first: what the hero and the side slots open
+  const pickedList = c => { const pk = picksOf(c); return SIDES.map(x => x[0]).filter(k => pk[k]).map(k => ({ file: pk[k], view: k })) }
 
   function imagesBody(c, b) {
     const vars = (c.variants || []).filter(v => !v.hidden)
     const picks = picksOf(c)
     const main = picks.front
-    b.append(main ? h('div', { class: 'hero', style: { backgroundImage: `url("${fileUrl(main)}")` }, onclick: () => lightbox(c, vars.find(v => v.file === main) || { file: main, view: 'front' }) }, h('span', { class: 'hero-side' }, sideIcon(viewOf(vars.find(v => v.file === main) || { view: 'front' }))))
+    b.append(main ? h('div', { class: 'hero', style: { backgroundImage: `url("${fileUrl(main)}")` }, onclick: () => lightbox(c, { file: main }, pickedList(c)) }, h('span', { class: 'hero-side' }, sideIcon(viewOf(vars.find(v => v.file === main) || { view: 'front' }))))
       : h('div', { class: 'hero empty' }, vars.length ? 'Выбери главный вид (спереди) ниже' : 'Нет картинок. Сгенерируй или перетащи файл сюда.'))
     // the other sides: small, under the main view
     const others = SIDES.slice(1)
@@ -515,7 +537,7 @@ async function boardPage(view, pid, bid, tok) {
       b.append(h('div', { class: 'side-row' }, ...others.map(([k, name]) => {
         const f = picks[k]
         return h('div', { class: 'side-slot' + (f ? '' : ' empty') + (filters.get(c.id) === k ? ' on' : ''), title: name + (f ? '' : ': не выбрано'),
-          style: f ? { backgroundImage: `url("${fileUrl(f)}")` } : {}, onclick: () => { filters.set(c.id, filters.get(c.id) === k ? null : k); render() } }, sideIcon(k), f ? null : h('span', {}, name))
+          style: f ? { backgroundImage: `url("${fileUrl(f)}")` } : {}, onclick: () => { if (f) lightbox(c, { file: f }, pickedList(c)); else { filters.set(c.id, filters.get(c.id) === k ? null : k); render() } } }, sideIcon(k), f ? null : h('span', {}, name))
       })))
     }
     if (vars.length) {
@@ -528,7 +550,7 @@ async function boardPage(view, pid, bid, tok) {
       const list = (filter ? vars.filter(v => viewOf(v) === filter) : vars).slice(-8)
       b.append(h('div', { class: 'strip' }, ...list.slice().reverse().map(v => {
         const side = viewOf(v), isPick = picks[side] === v.file
-        return h('div', { class: 'thumb-v' + (isPick ? ' ch' : ''), title: (SIDE[side].name + (v.prompt ? ': ' + v.prompt : '')).slice(0, 300), style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v) },
+        return h('div', { class: 'thumb-v' + (isPick ? ' ch' : ''), title: (SIDE[side].name + (v.prompt ? ': ' + v.prompt : '')).slice(0, 300), style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v, list.slice().reverse()) },
           sideIcon(side),
           h('button', { class: 'x', title: 'Скрыть вариант', onclick: e => { e.stopPropagation(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: true }).then(refresh).catch(() => {}) } }, '✕'))
       })))
