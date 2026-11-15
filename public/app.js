@@ -655,6 +655,7 @@ async function boardPage(view, pid, bid, tok) {
     return { model, poly, variants: model === 'p2' ? spread : [poly], quads: TRIPO_MODELS[model].quads, texture: false,
       smartUV: model === 'p2' && ['cloth', 'head'].includes(kind), retopo: model === 'h3' ? poly : null, multiview: true, kind }
   }
+  const openTripoFiles = c => api('POST', `${base}/cards/${c.id}/tripo-files`).then(r => toast(`Открываю папку для Tripo: ${r.files.length} ${r.files.length === 1 ? 'картинка' : 'картинки'}`)).catch(() => {})
   function tripoTab(c, n) {
     const open = tripoOpen.has(c.id)
     const tab = h('button', { class: 'tripo-tab' + (open ? ' on' : ''), title: 'Настройки Tripo для этой детали', onclick: e => { e.stopPropagation(); open ? tripoOpen.delete(c.id) : tripoOpen.add(c.id); render() } },
@@ -687,10 +688,10 @@ async function boardPage(view, pid, bid, tok) {
       h('div', { class: 'tp-sec' }, h('div', { class: 'tp-k' }, 'Multi-view images'),
         h('div', { class: 'tp-views' }, ...views.map(([k, label]) => {
           const f = picks[k]
-          return h('div', { class: 'tp-view' + (f ? '' : ' empty'), style: f ? { backgroundImage: `url("${fileUrl(f)}")` } : {}, title: f ? 'Показать файл в папке, чтобы перетащить в Tripo' : 'Сторона не выбрана', onclick: () => f && openFile(f, 'folder') },
+          return h('div', { class: 'tp-view' + (f ? '' : ' empty'), style: f ? { backgroundImage: `url("${fileUrl(f)}")` } : {}, title: f ? 'Открыть папку для Tripo со всеми выбранными сторонами (они будут выделены)' : 'Сторона не выбрана', onclick: () => f && openTripoFiles(c) },
             h('span', {}, label))
         })),
-        h('div', { class: 'tp-hint' }, 'Клик по картинке откроет её в папке: перетащи в слот Tripo с тем же названием.')),
+        h('div', { class: 'tp-hint' }, 'Клик откроет папку, где выбранные стороны лежат как front / back / left / right и уже выделены: перетащи их в Tripo.')),
       h('div', { class: 'tp-foot' }, h('span', { class: 'tp-cost' }, `≈ ${credits} кредитов`),
         h('button', { class: 'tp-ghost', title: 'Скопировать настройки текстом', onclick: () => navigator.clipboard.writeText(summary()).then(() => toast('Настройки скопированы')) }, 'Копировать'),
         h('button', { class: 'tp-btn', disabled: busy(c), title: 'Claude посмотрит на деталь и правила пайплайна и подберёт настройки', onclick: () => generate(c, { kind: 'tripo' }) }, 'Claude, подбери')),

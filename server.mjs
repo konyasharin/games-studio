@@ -363,6 +363,53 @@ route('GET', '/api/settings', async () => settings())
 // open a project file on this computer: reveal it in the file manager, or load it into Blender
 const BLENDER_DEFAULT = process.platform === 'win32' ? 'C:/Program Files (x86)/Steam/steamapps/common/Blender/blender.exe'
   : process.platform === 'darwin' ? '/Applications/Blender.app/Contents/MacOS/Blender' : 'blender'
+// the chosen sides of a card copied into one folder named by Tripo's slots, opened with those files selected
+route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/tripo-files', async (req, m) => {
+  const p = await project(m.pid)
+  const b = await readJSON(boardFile(p, m.bid), null); if (!b) throw httpError(404, 'нет доски')
+  const c = findCard(b, m.cid)
+  const picks = { ...(c.picks || {}), front: c.picks?.front || c.chosen }
+  const dir = path.join(projDir(p), 'tripo', safeName(c.title || c.id))
+  await fsp.mkdir(dir, { recursive: true })
+  // copy only what changed: rewriting a file makes Explorer refresh the folder and drop the selection
+  const files = []
+  for (const side of ['front', 'back', 'left', 'right']) {
+    const src = picks[side] && path.resolve(ROOT, picks[side])
+    const dst = src && path.join(dir, side + path.extname(src).toLowerCase())
+    for (const f of await fsp.readdir(dir)) if (f.startsWith(side + '.') && path.join(dir, f) !== dst) await fsp.rm(path.join(dir, f), { force: true })
+    if (!src || !inside(ROOT, src)) continue
+    try {
+      const [a, b] = await Promise.all([fsp.stat(src), fsp.stat(dst).catch(() => null)])
+      if (!b || b.size !== a.size) await fsp.copyFile(src, dst)
+      files.push(dst)
+    } catch {}
+  }
+  if (!files.length) throw httpError(404, 'у карточки нет выбранных сторон')
+  revealMany(dir, files)
+  return { dir: toRel(dir), files: files.map(toRel) }
+})
+function revealMany(dir, files) {
+  if (process.platform === 'win32') {
+    const q = s => "'" + s.replace(/'/g, "''") + "'"
+    const ps = [
+      `$dir = ${q(path.win32.normalize(dir))}`, `$names = @(${files.map(f => q(path.basename(f))).join(',')})`,
+      '$sh = New-Object -ComObject Shell.Application',
+      'function Find { $sh.Windows() | Where-Object { try { $_.Document.Folder.Self.Path -eq $dir } catch { $false } } | Select-Object -First 1 }',
+      // an already open window of this folder is reused (a second one would come up on top without the selection)
+      '$w = Find', 'if (-not $w) { Start-Process explorer.exe $dir; for ($i = 0; $i -lt 24 -and -not $w; $i++) { Start-Sleep -Milliseconds 250; $w = Find } }',
+      'if ($w) { try { (New-Object -ComObject WScript.Shell).AppActivate($w.LocationName) | Out-Null } catch {} }',
+      // select after the window settles, and again if a refresh dropped the selection
+      'function Sel { $first = $true; foreach ($n in $names) { $it = $w.Document.Folder.ParseName($n); if ($it) { $w.Document.SelectItem($it, $(if ($first) { 29 } else { 1 })); $first = $false } } }',
+      'if ($w) { Start-Sleep -Milliseconds 500; Sel; for ($k = 0; $k -lt 6; $k++) { Start-Sleep -Milliseconds 500; if (@($w.Document.SelectedItems()).Count -lt $names.Count) { Sel } } }',
+    ].join('; ')
+    // -EncodedCommand (UTF-16LE base64): no quoting trouble with spaces, quotes or Cyrillic in the path
+    const ch = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], { detached: true, stdio: 'ignore', windowsHide: true })
+    ch.on('error', () => {}); ch.unref()
+  } else if (process.platform === 'darwin') {
+    const ch = spawn('open', ['-R', files[0]], { detached: true, stdio: 'ignore' }); ch.on('error', () => {}); ch.unref()
+  } else { const ch = spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }); ch.on('error', () => {}); ch.unref() }
+}
+
 route('POST', '/api/open', async req => {
   const { file, how = 'folder' } = await json(req)
   const abs = path.resolve(ROOT, String(file || ''))
