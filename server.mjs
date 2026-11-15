@@ -614,13 +614,13 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/generate', async (req, 
   up(c.id)
   inputs.push(...(c.inputs || []))
   if ([...jobs.values()].some(j => j.card === c.id && active(j))) throw httpError(409, 'уже в очереди')
-  const kind = ['images', 'split', 'note'].includes(opts.kind) ? opts.kind : c.type === 'split' ? 'split' : 'images'
+  const kind = ['images', 'split', 'note', 'describe'].includes(opts.kind) ? opts.kind : c.type === 'split' ? 'split' : 'images'
   const SIDES = ['front', 'back', 'left', 'right']
   const sides = (Array.isArray(opts.sides) ? opts.sides : c.sides || ['front']).filter(x => SIDES.includes(x))
   if (kind === 'images' && !sides.length) throw httpError(400, 'выбери хотя бы одну сторону')
-  // the card's own chosen front is the identity reference for its other sides
-  const own = c.picks?.front || c.chosen
-  if (own && sides.some(x => x !== 'front') && !inputs.includes(own)) inputs.unshift(own)
+  // the card's own chosen sides are references too: the front for the other sides, all of them for a description
+  const own = kind === 'describe' ? [c.picks?.front || c.chosen, ...Object.values(c.picks || {})] : sides.some(x => x !== 'front') ? [c.picks?.front || c.chosen] : []
+  for (const f of new Set(own.filter(Boolean))) if (!inputs.includes(f)) inputs.unshift(f)
   const j = { id: id(), kind, project: p.id, projectDir: p.dir, board: m.bid, card: c.id, cardTitle: c.title, status: 'queued', created: now(), log: [],
     prompt: typeof opts.prompt === 'string' ? opts.prompt : c.prompt || '', count: Math.max(1, Math.min(8, Number(opts.count ?? c.count ?? 4) || 4)), inputs, sides }
   jobs.set(j.id, j)
@@ -678,7 +678,8 @@ route('POST', '/api/jobs/:jid/complete', async (req, m, url) => {
     const p = await project(j.project)
     await mutateBoard(p, j.board, b => {
       const c = findCard(b, j.card)
-      for (const k of ['prompt', 'proposal', 'answer']) if (typeof body.cardPatch[k] === 'string') c[k] = body.cardPatch[k]
+      if (j.kind === 'describe' && typeof body.cardPatch.prompt === 'string' && c.prompt && c.prompt !== body.cardPatch.prompt) c.promptPrev = c.prompt
+      for (const k of ['prompt', 'proposal', 'answer', 'doubts']) if (typeof body.cardPatch[k] === 'string') c[k] = body.cardPatch[k]
       if (Array.isArray(body.cardPatch.parts)) {
         const keep = (c.parts || []).filter(x => x.card)
         c.parts = keep.concat(body.cardPatch.parts.map(x => ({ pid: id(), name: String(x.name || ''), includes: String(x.includes || ''), route: String(x.route || ''), prompt: String(x.prompt || '') })))

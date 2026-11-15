@@ -26,21 +26,39 @@ Rules that always hold:
 - Finish with `POST {api}/api/jobs/{id}/complete?token=<token>` and JSON `{"status": "done"|"error", "message": "...",
   "cardPatch": {...optional fields to set on the card...}}`. Always call it, also on failure.
 
+## kind = "describe"
+Write the card's master description: one text that describes the object fully from all sides, the base the author
+edits and every per-side image prompt is built from. Look at every file in `inputs` (Read them: the parent's
+chosen sides and this card's own chosen sides) and the board context. Russian, structured with short headings:
+«Общее» (what it is, silhouette, proportions, pose/state, materials, colours with names like «тёмно-серый
+графит», «красный кант»), «Спереди», «Сзади», «Слева», «Справа» (what is seen from that side only: seams,
+fasteners, slits, piping, folds, edges), «Чего нет» (things a generator tends to add that must not appear), and
+«Сомнения» (details the references don't show clearly, each with your best guess). No camera or side wording,
+no background wording: that is added per image. Nothing invented beyond the references; uncertain things go to
+«Сомнения». Complete with `cardPatch: {"prompt": "<the description>", "doubts": "<the Сомнения list, one line each>"}`.
+No image generation in this kind.
+
 ## kind = "images"
 Generate `count` images for EACH side in `sides` (`front`, `back`, `left`, `right`): every image shows ONE side
 of the object, nothing else on it. `inputs` are local paths of reference images (the chosen pictures of the parent
 cards and, for the non-front sides, this card's own chosen front view): attach them all to the Flow prompt.
-`prompt` is what the user or Claude wrote; if it is empty, write one from the card title, the board context and
-the parent image. Add to every prompt, by side (Russian):
+`prompt` is the card's master description (all sides; the author may have edited it). Do not send it as is:
+for each side BUILD that side's prompt from it: «Общее» + the part about this side (+ what shows at the edges
+from the neighbouring sides) + «Чего нет», and drop what can't be seen from this side. If `prompt` is empty or
+is a short plain request, write the side prompts from the card title, the board context and the references.
+For several images of one side (`count` > 1), keep everything you are sure of word for word identical and vary
+only the doubtful details (the card's «Сомнения» / `doubts`, or what the references show unclearly), a different
+plausible reading in each image, so one of them comes out right; say in the log what you varied.
+Add to every side prompt, by side (Russian):
 - front: «строго вид спереди, анфас, объект смотрит прямо в камеру, ортографическая проекция, без поворота и без
   перспективы, не в три четверти»
 - back: «строго вид сзади, ровно со спины, ортографическая проекция, без поворота, не в три четверти»
 - left: «строго вид слева, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
 - right: «строго вид справа, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
 and always: «та же поза, те же пропорции и детали, что на референсе, ничего не добавлять; светло-серый ровный
-фон, мягкий ровный свет, без теней, без текста, объект целиком в кадре». Run each side as its own generation.
+фон, мягкий ровный свет, без теней, без текста, объект целиком в кадре». Run each image as its own generation.
 Before posting, look at each result: if it is clearly turned (three-quarter) instead of a strict side, generate
-that one again (at most twice), and say so in the log.
+that one again (at most twice), and say so in the log. Do not change the card's prompt in this kind.
 1. Open `flowUrl` in a new tab (tabs_create_mcp + navigate). Choose image generation with `imageModel`.
 2. Attach the input images (file_upload with the local paths), type the prompt, set the number of outputs (Flow
    gives at most 4 per run: for 5..8 run twice). Generate and wait until the new images are finished.
@@ -60,7 +78,7 @@ that one again (at most twice), and say so in the log.
    // the message carries the side (view) and PROMPT = the full text typed into Flow for that image, side wording included
    ```
    Check every ack is `ok`; close the receiver tab afterwards (`rx.close()`).
-4. Complete with status "done", `cardPatch: {"prompt": "<the prompt you used>"}` if the card's prompt was empty.
+4. Complete with status "done" (no cardPatch).
 
 ## kind = "split"
 The parent card's chosen image (in `inputs`) is a character reference. Look at it (Read the file) and propose

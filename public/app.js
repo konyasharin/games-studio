@@ -360,6 +360,26 @@ async function boardPage(view, pid, bid, tok) {
     } catch {}
   }
 
+  // a card that grew (new pictures, a status line) must not cover the one below: push the lower ones down
+  const unoverlap = debounce(async () => {
+    if (dragging) return
+    const GAP = 40, moved = {}
+    const box = c => ({ c, x0: c.x, x1: c.x + (nodes.get(c.id)?.offsetWidth || c.w || 380), h: nodes.get(c.id)?.offsetHeight || 0 })
+    const all = B.cards.map(box).filter(b => b.h).sort((a, b) => a.c.y - b.c.y)
+    for (let i = 0; i < all.length; i++) {
+      for (let k = 0; k < i; k++) {
+        const a = all[k], b = all[i]
+        if (a.x1 <= b.x0 || b.x1 <= a.x0) continue
+        const need = a.c.y + a.h + GAP
+        if (b.c.y < need && b.c.y + b.h > a.c.y) { b.c.y = need; moved[b.c.id] = [b.c.x, need] }
+      }
+    }
+    if (!Object.keys(moved).length) return
+    for (const id of Object.keys(moved)) { const n = nodes.get(id); if (n) n.style.top = moved[id][1] + 'px' }
+    drawLinks(); assist.boardRendered()
+    try { await api('POST', `${base}/layout`, { positions: moved }, { quiet: true }) } catch {}
+  }, 250)
+
   // cards are kept as DOM nodes keyed by id; a card being edited or dragged is not rebuilt under the user
   const nodes = new Map()
   let dragging = null, linking = null, editing = new Set()
@@ -380,7 +400,7 @@ async function boardPage(view, pid, bid, tok) {
       nodes.set(c.id, fresh)
     }
     for (const [cid, n] of nodes) if (!seen.has(cid)) { n.remove(); nodes.delete(cid) }
-    requestAnimationFrame(() => { drawLinks(); assist.boardRendered() })
+    requestAnimationFrame(() => { drawLinks(); assist.boardRendered(); unoverlap() })
   }
   function anchor(cid, side) {
     const c = B.cards.find(x => x.id === cid), n = nodes.get(cid); if (!c || !n) return null
@@ -557,9 +577,12 @@ async function boardPage(view, pid, bid, tok) {
       const shown = filter ? counts[filter] : vars.length
       if (shown > 8) b.append(h('span', { class: 'more' }, `ещё ${shown - 8} в истории`))
     }
-    const ta = h('textarea', { class: 'prompt', placeholder: 'Промпт (по-русски). Пусто — Claude напишет сам по названию и связанным карточкам.' }); ta.value = c.prompt || ''
+    const ta = h('textarea', { class: 'prompt desc', placeholder: 'Описание детали со всех сторон: основа промптов. Нажми «Описать со всех сторон», и Claude напишет его по референсам; потом поправь.' }); ta.value = c.prompt || ''
     ta.addEventListener('change', () => patch(c, { prompt: ta.value }))
-    b.append(ta)
+    b.append(h('div', { class: 'desc-h' }, h('span', {}, 'Описание детали'),
+      c.promptPrev ? h('button', { class: 'btn sm ghost', title: 'Вернуть текст, который был до последнего описания Claude', onclick: () => patch(c, { prompt: c.promptPrev, promptPrev: c.prompt || '' }) }, '↶ прошлое') : null,
+      h('button', { class: 'btn sm', disabled: busy(c), title: 'Claude посмотрит на референсы и опишет деталь спереди, сзади и с боков; промпты под каждую сторону он соберёт из этого описания при генерации', onclick: () => generate(c, { kind: 'describe' }) }, '✎ Описать со всех сторон')), ta)
+    if (c.doubts) b.append(h('div', { class: 'doubts', title: 'В этом Claude не уверен: при нескольких вариантах на сторону он меняет только эти места' }, h('b', {}, 'Сомнения: '), c.doubts))
     const chosenSides = c.sides?.length ? c.sides : ['front']
     const sidePick = h('div', { class: 'seg sides', title: 'Какие стороны генерировать: каждая отдельной картинкой, строго, не в три четверти' },
       ...SIDES.map(([k, name, short]) => h('button', { class: chosenSides.includes(k) ? 'on' : '', title: name, onclick: () => {
@@ -693,7 +716,7 @@ function renderQueue(jobs) {
   const p = $('#queuePanel'); p.innerHTML = ''
   p.append(h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Задачи Claude'), h('button', { class: 'icon-btn', onclick: () => { p.hidden = true } }, '✕')))
   if (!jobs.length) p.append(h('div', { class: 'empty-note' }, 'Задач ещё не было'))
-  const KIND = { images: 'Картинки', split: 'Разбивка', note: 'Вопрос' }
+  const KIND = { images: 'Картинки', split: 'Разбивка', note: 'Вопрос', describe: 'Описание', request: 'Задача на месте', chat: 'Чат' }
   for (const j of jobs.slice(0, 40)) {
     p.append(h('div', { class: 'job' }, h('div', { class: 't' }, h('b', {}, `${KIND[j.kind] || j.kind}: ${j.cardTitle || ''}`), h('span', { class: 'tag ' + j.status }, j.status)),
       h('div', { class: 'l' }, (j.log || []).slice(-3).map(x => x.replace(/^\S+\s/, '')).join('\n')),

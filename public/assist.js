@@ -194,7 +194,7 @@ export function initAssist({ api, h, toast, getCtx, confirm2 }) {
   document.body.append(drawer)
   let chatOpen = false, chatTimer = null, chatKey = ''
   chatBtn.addEventListener('click', () => { chatOpen = !chatOpen; drawer.hidden = !chatOpen; chatBtn.classList.toggle('on', chatOpen); document.body.classList.toggle('chat-open', chatOpen); if (chatOpen) buildChat() })
-  const KIND = { images: 'Генерация картинок', split: 'Разбивка на части', note: 'Вопрос с карточки', request: 'Задача на месте' }
+  const KIND = { images: 'Генерация картинок', split: 'Разбивка на части', note: 'Вопрос с карточки', request: 'Задача на месте', describe: 'Описание детали' }
   function buildChat() {
     const c = getCtx(); drawer.innerHTML = ''
     if (!c?.pid) { drawer.append(h('div', { class: 'empty-note' }, 'Открой проект, чтобы говорить с Claude')); return }
