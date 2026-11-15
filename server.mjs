@@ -628,6 +628,15 @@ route('POST', '/api/projects/:pid/boards/:bid/links', async (req, m) => {
     if (from !== to && b.cards.some(c => c.id === from) && b.cards.some(c => c.id === to) && !b.links.some(l => l.from === from && l.to === to)) b.links.push({ id: id(), from, to })
   })
 })
+// undo of a card deletion: the card comes back with its id and the links that still have both ends
+route('POST', '/api/projects/:pid/boards/:bid/restore', async (req, m) => {
+  const p = await project(m.pid); const { card, links = [] } = await json(req)
+  if (!card?.id || !/^[\w-]{1,40}$/.test(card.id)) throw httpError(400, 'card')
+  return mutateBoard(p, m.bid, b => {
+    if (!b.cards.some(c => c.id === card.id)) b.cards.push(card)
+    for (const l of links) if (l?.id && b.cards.some(c => c.id === l.from) && b.cards.some(c => c.id === l.to) && !b.links.some(x => x.id === l.id || (x.from === l.from && x.to === l.to))) b.links.push({ id: l.id, from: l.from, to: l.to })
+  })
+})
 route('DELETE', '/api/projects/:pid/boards/:bid/links/:lid', async (req, m) => {
   const p = await project(m.pid)
   return mutateBoard(p, m.bid, b => { b.links = b.links.filter(l => l.id !== m.lid) })

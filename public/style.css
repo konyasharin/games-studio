@@ -352,3 +352,6 @@ textarea.prompt.desc { min-height: 110px; }
 .thumb-tag { position: absolute; left: 8px; top: 8px; font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(15,17,21,.8); border: 1px solid var(--line2); color: var(--muted); }
 .thumb-tag.tex { color: #a6e9c9; border-color: rgba(63,191,134,.5); }
 .file-line .btn.sm { padding: 2px 6px; }
+.bin-btn { align-self: flex-start; font-size: 12px; }
+.strip.bin .thumb-v { opacity: .6; } .strip.bin .thumb-v:hover { opacity: 1; }
+.thumb-v .restore { position: absolute; right: 3px; top: 3px; background: rgba(63,191,134,.9); border: 0; color: #fff; border-radius: 6px; font-size: 13px; padding: 1px 6px; }

@@ -385,7 +385,8 @@ async function boardPage(view, pid, bid, tok) {
   let dragging = null, linking = null, editing = new Set()
   const jobOf = cid => B.jobs.filter(j => j.card === cid).sort((a, b) => a.created.localeCompare(b.created)).at(-1)
   const filters = new Map() // per card: which side's variants the strip shows
-  const sig = c => JSON.stringify([c, jobOf(c.id), filters.get(c.id)])
+  const trashOpen = new Set()
+  const sig = c => JSON.stringify([c, jobOf(c.id), filters.get(c.id), trashOpen.has(c.id)])
 
   function render() {
     const seen = new Set()
@@ -414,7 +415,7 @@ async function boardPage(view, pid, bid, tok) {
       const a = anchor(l.from, 'out'), b = anchor(l.to, 'in'); if (!a || !b) continue
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
       path.setAttribute('d', curve(a, b))
-      path.addEventListener('click', async e => { e.stopPropagation(); if (await confirm2('Убрать связь?', 'Убрать')) { await api('DELETE', `${base}/links/${l.id}`); refresh() } })
+      path.addEventListener('click', async e => { e.stopPropagation(); if (await confirm2('Убрать связь? Ctrl+Z вернёт её.', 'Убрать')) { try { await api('DELETE', `${base}/links/${l.id}`); remember('связь', () => api('POST', `${base}/links`, { from: l.from, to: l.to })) } catch {} refresh() } })
       svg.append(path)
     }
     if (linking) {
@@ -425,6 +426,19 @@ async function boardPage(view, pid, bid, tok) {
   const toWorld = e => { const r = el.getBoundingClientRect(); return [(e.clientX - r.left - cam.x) / cam.z, (e.clientY - r.top - cam.y) / cam.z] }
 
   const patch = (c, body) => api('PATCH', `${base}/cards/${c.id}`, body).then(() => refresh()).catch(() => {})
+  // Ctrl+Z: the last deletions on this board come back (pictures, cards with their links, links)
+  const undo = []
+  const remember = (label, run) => { undo.push({ label, run }); if (undo.length > 30) undo.shift() }
+  const onKey = async e => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z' && e.code !== 'KeyZ') return
+    if (e.target.closest?.('textarea, input, [contenteditable="true"]') || !$('#modal').hidden) return
+    e.preventDefault()
+    const step = undo.pop()
+    if (!step) return toast('Нечего отменять')
+    try { await step.run(); toast('Вернула: ' + step.label + (undo.length ? ` (ещё шагов: ${undo.length})` : '')); refresh() } catch { toast('Не получилось вернуть: ' + step.label, true) }
+  }
+  document.addEventListener('keydown', onKey)
+
   const inflight = new Set()
   const generate = async (c, body = {}) => {
     if (inflight.has(c.id)) return
@@ -444,7 +458,12 @@ async function boardPage(view, pid, bid, tok) {
     title.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); title.blur() } })
     const head = h('div', { class: 'card-h' }, h('span', { class: 'card-type' }, TYPES[c.type] || c.type), title,
       c.frozen ? h('span', { class: 'frozen-badge' }, 'заморожено') : null,
-      h('button', { class: 'icon-btn', title: 'Удалить карточку', onclick: async () => { if (await confirm2(`Удалить карточку «${c.title}»? Файлы останутся на диске.`)) { await api('DELETE', `${base}/cards/${c.id}`); refresh() } } }, '✕'))
+      h('button', { class: 'icon-btn', title: 'Удалить карточку (Ctrl+Z вернёт)', onclick: async () => {
+        if (!(await confirm2(`Удалить карточку «${c.title}»? Файлы останутся на диске, Ctrl+Z вернёт её.`))) return
+        const snap = JSON.parse(JSON.stringify(B.cards.find(x => x.id === c.id) || c)), links = B.links.filter(l => l.from === c.id || l.to === c.id)
+        try { await api('DELETE', `${base}/cards/${c.id}`); remember('карточку «' + c.title + '»', () => api('POST', `${base}/restore`, { card: snap, links })) } catch {}
+        refresh()
+      } }, '✕'))
     head.addEventListener('pointerdown', e => {
       if (e.target.closest('.card-title:focus, button')) return
       if (e.target.classList.contains('card-title') && document.activeElement === e.target) return
@@ -573,10 +592,26 @@ async function boardPage(view, pid, bid, tok) {
         const side = viewOf(v), isPick = picks[side] === v.file
         return h('div', { class: 'thumb-v' + (isPick ? ' ch' : ''), title: (SIDE[side].name + (v.prompt ? ': ' + v.prompt : '')).slice(0, 300), style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v, list.slice().reverse()) },
           sideIcon(side),
-          h('button', { class: 'x', title: 'Скрыть вариант', onclick: e => { e.stopPropagation(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: true }).then(refresh).catch(() => {}) } }, '✕'))
+          h('button', { class: 'x', title: 'Удалить вариант (Ctrl+Z вернёт)', onclick: e => {
+            e.stopPropagation()
+            const before = { chosen: c.chosen ?? null, picks: c.picks ? { ...c.picks } : null }
+            api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: true }).then(() => {
+              remember('картинку', async () => { await api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: false }); if (before.chosen === v.file || Object.values(before.picks || {}).includes(v.file)) await api('PATCH', `${base}/cards/${c.id}`, before) })
+              refresh()
+            }).catch(() => {})
+          } }, '✕'))
       })))
       const shown = filter ? counts[filter] : vars.length
       if (shown > 8) b.append(h('span', { class: 'more' }, `ещё ${shown - 8} в истории`))
+    }
+    // the bin: pictures deleted at any time, back with one click
+    const binned = (c.variants || []).filter(v => v.hidden)
+    if (binned.length) {
+      const open = trashOpen.has(c.id)
+      b.append(h('button', { class: 'btn sm ghost bin-btn', onclick: () => { open ? trashOpen.delete(c.id) : trashOpen.add(c.id); render() } }, `🗑 Удалённые: ${binned.length}${open ? ' ▴' : ' ▾'}`))
+      if (open) b.append(h('div', { class: 'strip bin' }, ...binned.slice(-16).reverse().map(v => h('div', { class: 'thumb-v', title: SIDE[viewOf(v)].name, style: { backgroundImage: `url("${fileUrl(v.file)}")` } },
+        sideIcon(viewOf(v)),
+        h('button', { class: 'restore', title: 'Вернуть', onclick: e => { e.stopPropagation(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: false }).then(refresh).catch(() => {}) } }, '↺')))))
     }
     const ta = h('textarea', { class: 'prompt desc', placeholder: 'Описание детали со всех сторон: основа промптов. Нажми «Описать со всех сторон», и Claude напишет его по референсам; потом поправь.' }); ta.value = c.prompt || ''
     ta.addEventListener('change', () => patch(c, { prompt: ta.value }))
@@ -716,7 +751,7 @@ async function boardPage(view, pid, bid, tok) {
   async function loop() { if (stopped) return; await refresh(); timer = setTimeout(loop, document.hidden ? 6000 : 2000) }
   render(); lastVersion = B.version; if (!B.view) setTimeout(fit, 60)
   timer = setTimeout(loop, 2000)
-  return { stop: () => { stopped = true; clearTimeout(timer) } }
+  return { stop: () => { stopped = true; clearTimeout(timer); document.removeEventListener('keydown', onKey) } }
 }
 
 // ---------- queue panel ----------
