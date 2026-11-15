@@ -45,6 +45,13 @@ export function themePage(main, p, { api, h, toast, fileUrl, onSaved }) {
   const save = async () => { try { const d = await api('PATCH', `/api/projects/${p.id}`, { theme: t }); t = d.theme || t; applyTheme(t); onSaved?.(t) } catch {} }
   let timer; const saveSoon = () => { applyTheme(t); clearTimeout(timer); timer = setTimeout(save, 500) }
   const page = h('div', { class: 'page theme-page' })
+  // the page shows every preset and font in its own face: load them all here once
+  if (!document.getElementById('all-fonts')) {
+    const fams = [...new Set([...FONTS, ...Object.values(PRESETS).flatMap(x => [x.fontDisplay, x.fontBody])])].filter(f => !['Inter', 'Space Grotesk'].includes(f))
+    const l = document.createElement('link'); l.id = 'all-fonts'; l.rel = 'stylesheet'
+    l.href = 'https://fonts.googleapis.com/css2?' + fams.map(f => 'family=' + encodeURIComponent(f).replace(/%20/g, '+') + ':wght@400;700').join('&') + '&display=swap'
+    document.head.append(l)
+  }
   const render = () => {
     page.innerHTML = ''
     page.append(h('h1', {}, 'Оформление'), h('p', { class: 'sub' }, 'Шрифты, цвета, логотип и обложка этого проекта. Меняется сразу, сохраняется само.'))
