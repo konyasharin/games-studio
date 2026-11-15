@@ -186,17 +186,12 @@ function killTree(pid) {
   try { process.platform === 'win32' ? execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {}) : process.kill(pid) } catch {}
 }
 
-// at startup: a job left "running" by a crashed server gets its Claude killed and goes back to the queue once
-for (const j of sortedJobs().filter(j => j.status === 'running')) {
-  killTree(j.pid)
-  j.status = (j.retries || 0) < 1 ? 'queued' : 'error'
-  j.retries = (j.retries || 0) + 1
-  j.log.push(now() + ' прервано перезапуском сервера')
-  saveJob(j).catch(() => {})
-}
-
 // ---------- worker: one headless Claude at a time ----------
+// Claude runs detached from the server with its output going to a file: a server restart neither kills it nor
+// loses what it says; the new server picks the running job up again and keeps reading the file.
 let running = null, child_ = null, ticking = false
+const alive = pid => { if (!pid) return false; try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+
 async function workerTick() {
   if (ticking || running) return
   ticking = true
@@ -206,6 +201,77 @@ async function workerTick() {
     const next = sortedJobs().find(j => j.status === 'queued')
     if (next) await runJob(next, s)
   } catch (e) { console.error(now(), 'worker', e) } finally { ticking = false }
+}
+
+// follow a running Claude: parse its stream-json output from the log file, finish the job when it exits
+function follow(job, { sid, started, pid, offset, owned }) {
+  const logFile = path.join(JOBS, job.id + '.log')
+  let pos = offset || 0, buf = '', result = null, tail = '', finished = false, exitCode = null
+  job.events = []
+  running = job.id
+  const read = () => {
+    let fd
+    try {
+      fd = fs.openSync(logFile, 'r')
+      const size = fs.fstatSync(fd).size
+      if (size > pos) {
+        const b = Buffer.alloc(size - pos); fs.readSync(fd, b, 0, b.length, pos); pos = size
+        const text = b.toString('utf8'); tail = (tail + text).slice(-4000); buf += text
+        let i
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i); buf = buf.slice(i + 1)
+          let e; try { e = JSON.parse(line) } catch { continue }
+          if (e.type === 'assistant') {
+            for (const c of e.message?.content || []) {
+              if (c.type === 'text' && c.text?.trim()) job.events.push({ t: 'text', text: c.text.slice(0, 8000), at: now() })
+              else if (c.type === 'tool_use') job.events.push({ t: 'tool', name: c.name, brief: toolBrief(c.name, c.input), at: now() })
+            }
+          } else if (e.type === 'result') result = e
+          if (job.events.length > 300) job.events.splice(0, job.events.length - 300)
+          job.updated = now()
+        }
+      }
+    } catch {} finally { if (fd !== undefined) try { fs.closeSync(fd) } catch {} }
+  }
+  const finish = async (status, line) => {
+    if (finished) return
+    finished = true; clearInterval(iv); read()
+    try {
+      await mutateJob(job.id, j => {
+        if (j.kind === 'chat') { j.answer = String(result?.result || '').slice(0, 20000); j.cost = result?.total_cost_usd }
+        if (j.status === 'running') { j.status = status; j.log.push(now() + ' ' + line); if (j.kind === 'request') j.thread = [...(j.thread || []), { who: 'claude', text: status === 'done' ? 'Готово (без отчёта).' : 'Не получилось: ' + line, at: now() }] }
+      })
+    } catch {}
+    running = null; child_ = null
+    setTimeout(workerTick, 500)
+  }
+  let doneCalled = false
+  const done = async () => {
+    if (doneCalled) return
+    doneCalled = true
+    read()
+    const code = exitCode ?? (result && !result.is_error ? 0 : 1)
+    // the session is gone (deleted, or this machine never had it): start a fresh one and run the job again
+    if (code !== 0 && started && /No conversation found/i.test(tail)) {
+      const p = await project(job.project).catch(() => null)
+      if (p) await sessionFor(p.id, { fresh: true })
+      finished = true; clearInterval(iv)
+      try { await mutateJob(job.id, j => { if (j.status === 'running') { j.status = 'queued'; j.log.push(now() + ' сессия Claude не найдена, начинаю новую') } }) } catch {}
+      running = null; child_ = null; setTimeout(workerTick, 300)
+      return
+    }
+    await sessionUsed(job.project, sid).catch(() => {})
+    const ok = code === 0 && (job.kind !== 'chat' || (result && !result.is_error))
+    finish(ok ? 'done' : 'error', job.kind === 'chat' && ok ? 'ответ готов' : 'Claude завершился, код ' + code)
+  }
+  const t0 = Date.parse(job.started || now())
+  const iv = setInterval(() => {
+    read()
+    if (job.status !== 'running') { if (alive(pid)) killTree(pid); return finish('cancelled', 'остановлено') }
+    if (Date.now() - t0 > 45 * 60 * 1000) { killTree(pid); return finish('error', 'превышено время (45 мин)') }
+    if (!owned && !alive(pid)) done()
+  }, 700)
+  return { setExit: code => { exitCode = code; done() } }
 }
 
 async function runJob(job, s) {
@@ -226,71 +292,42 @@ async function runJob(job, s) {
     const prompt = job.kind === 'chat'
       ? `[Studio Board, чат проекта «${p.name || p.dir}» (${path.join(ROOT, p.dir)}). Это та же сессия, в которой ты выполняешь задачи с досок проекта. API доски: http://127.0.0.1:${PORT}/api (проект ${p.id}). Отвечай по-русски, коротко и по делу.]\n\n${job.text}`
       : template.replace('{{JOB}}', JSON.stringify(ctx, null, 2))
-    const out = fs.createWriteStream(path.join(JOBS, job.id + '.log'), { flags: 'a' })
-    out.on('error', () => {})
+    const promptFile = path.join(JOBS, job.id + '.prompt.txt'), logFile = path.join(JOBS, job.id + '.log')
+    await fsp.writeFile(promptFile, prompt)
     const sess = await sessionFor(p.id)
     const args = ['-p', '--chrome', '--permission-mode', 'auto', '--add-dir', ROOT, '--add-dir', APP, '--output-format', 'stream-json', '--verbose',
       ...(sess.started ? ['--resume', sess.id] : ['--session-id', sess.id])]
-    out.write(`\n===== ${now()} session ${sess.id} (${sess.started ? 'resume' : 'new'}) =====\n`)
-    const child = spawn(CLAUDE, args, { cwd: path.join(ROOT, p.dir), windowsHide: true })
-    running = job.id; child_ = child
-    let finished = false
-    const finish = async (status, line) => {
-      if (finished) return
-      finished = true; clearTimeout(timer); out.end()
-      try { await mutateJob(job.id, j => { if (j.status === 'running') { j.status = status; j.log.push(now() + ' ' + line); if (j.kind === 'request') j.thread = [...(j.thread || []), { who: 'claude', text: status === 'done' ? 'Готово (без отчёта).' : 'Не получилось: ' + line, at: now() }] } }) } catch {}
-      running = null; child_ = null
-      setTimeout(workerTick, 500)
-    }
-    const timer = setTimeout(() => killTree(child.pid), 45 * 60 * 1000)
-    child.on('error', e => finish('error', 'не удалось запустить Claude: ' + e.message))
-    let tail = '', buf = '', result = null
-    const keep = d => { tail = (tail + d.toString()).slice(-4000) }
-    child.stderr.on('data', keep)
-    job.events = job.kind === 'chat' ? [] : (job.events || [])
-    child.stdout.on('data', d => {
-      keep(d); buf += d.toString()
-      let i
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i); buf = buf.slice(i + 1)
-        let e; try { e = JSON.parse(line) } catch { continue }
-        if (e.type === 'assistant') {
-          for (const c of e.message?.content || []) {
-            if (c.type === 'text' && c.text?.trim()) job.events.push({ t: 'text', text: c.text.slice(0, 8000), at: now() })
-            else if (c.type === 'tool_use') job.events.push({ t: 'tool', name: c.name, brief: toolBrief(c.name, c.input), at: now() })
-          }
-        } else if (e.type === 'result') result = e
-        if (job.events.length > 300) job.events.splice(0, job.events.length - 300)
-        job.updated = now()
-      }
-    })
-    child.on('close', async code => {
-      // the session is gone (deleted, or this machine never had it): start a fresh one and run the job again
-      if (code !== 0 && sess.started && /No conversation found/i.test(tail)) {
-        await sessionFor(p.id, { fresh: true })
-        if (!finished) {
-          finished = true; clearTimeout(timer); out.end()
-          try { await mutateJob(job.id, j => { if (j.status === 'running') { j.status = 'queued'; j.log.push(now() + ' сессия Claude не найдена, начинаю новую') } }) } catch {}
-          running = null; child_ = null; setTimeout(workerTick, 300)
-        }
-        return
-      }
-      await sessionUsed(p.id, sess.id).catch(() => {})
-      if (job.kind === 'chat') {
-        const ok = code === 0 && result && !result.is_error
-        try { await mutateJob(job.id, j => { j.answer = String(result?.result || '').slice(0, 20000); j.cost = result?.total_cost_usd }) } catch {}
-        return finish(ok ? 'done' : 'error', ok ? 'ответ готов' : 'Claude завершился, код ' + code)
-      }
-      finish(code === 0 ? 'done' : 'error', 'Claude завершился, код ' + code)
-    })
-    child.stdin.on('error', () => {})
-    child.stdout.pipe(out); child.stderr.pipe(out)
-    child.stdin.end(prompt)
-    await mutateJob(job.id, j => { j.status = 'running'; j.started = now(); j.pid = child.pid; j.log.push(now() + ' запущен Claude') })
+    await fsp.appendFile(logFile, `\n===== ${now()} session ${sess.id} (${sess.started ? 'resume' : 'new'}) =====\n`)
+    const offset = (await fsp.stat(logFile)).size
+    const inFd = fs.openSync(promptFile, 'r'), outFd = fs.openSync(logFile, 'a')
+    let child
+    try { child = spawn(CLAUDE, args, { cwd: path.join(ROOT, p.dir), windowsHide: true, detached: true, stdio: [inFd, outFd, outFd] }) }
+    finally { fs.closeSync(inFd); fs.closeSync(outFd) }
+    child_ = child
+    await mutateJob(job.id, j => { j.status = 'running'; j.started = now(); j.pid = child.pid; j.sid = sess.id; j.sessStarted = sess.started; j.offset = offset; j.log.push(now() + ' запущен Claude') })
+    const f = follow(job, { sid: sess.id, started: sess.started, pid: child.pid, offset, owned: true })
+    child.on('error', e => { f.setExit(1); job.log.push(now() + ' не удалось запустить Claude: ' + e.message) })
+    child.on('exit', code => f.setExit(code ?? 1))
+    child.unref()
   } catch (e) {
     running = null; child_ = null
     await mutateJob(job.id, j => { j.status = 'error'; j.log.push(now() + ' ' + e.message) }).catch(() => {})
   }
+}
+
+// at startup: a job still "running" whose Claude is alive is picked up again; a dead one goes back to the queue once
+for (const j of sortedJobs().filter(j => j.status === 'running')) {
+  if (alive(j.pid) && j.offset != null && !running) {
+    j.log.push(now() + ' сервер перезапущен, продолжаю следить за задачей')
+    follow(j, { sid: j.sid, started: j.sessStarted, pid: j.pid, offset: j.offset, owned: false })
+    saveJob(j).catch(() => {})
+    continue
+  }
+  killTree(j.pid)
+  j.status = (j.retries || 0) < 1 ? 'queued' : 'error'
+  j.retries = (j.retries || 0) + 1
+  j.log.push(now() + ' прервано перезапуском сервера')
+  saveJob(j).catch(() => {})
 }
 setInterval(workerTick, 4000)
 

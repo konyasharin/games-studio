@@ -57,8 +57,14 @@ Add to every side prompt, by side (Russian):
 - right: «строго вид справа, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
 and always: «та же поза, те же пропорции и детали, что на референсе, ничего не добавлять; светло-серый ровный
 фон, мягкий ровный свет, без теней, без текста, объект целиком в кадре». Run each image as its own generation.
-Before posting, look at each result: if it is clearly turned (three-quarter) instead of a strict side, generate
-that one again (at most twice), and say so in the log. Do not change the card's prompt in this kind.
+Speed matters, the author is waiting at the board:
+- Submit ALL the generations of the job back to back first (Flow runs them in parallel), then collect.
+- Post each image to the board THE MOMENT it is finished and has passed your side check; never hold finished
+  images back until the end. Log progress after each one (`progress`: "posted/total").
+- Side check: if a result is clearly turned (three-quarter) instead of a strict side, start a new generation
+  for it right away (at most twice per image) while posting the others; don't post the turned one.
+- Wait with short checks (every 10-15 s), not long fixed sleeps.
+Do not change the card's prompt in this kind.
 1. Open `flowUrl` in a new tab (tabs_create_mcp + navigate). Choose image generation with `imageModel`.
 2. Attach the input images (file_upload with the local paths), type the prompt, set the number of outputs (Flow
    gives at most 4 per run: for 5..8 run twice). Generate and wait until the new images are finished.
