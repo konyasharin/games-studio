@@ -3,6 +3,14 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
+// several files load into one group (a card holding a suit and its boots shows them together)
+async function loadAll(urls) {
+  const list = await Promise.all([].concat(urls).map(loadModel))
+  if (list.length === 1) return list[0]
+  const g = new THREE.Group(); for (const m of list) g.add(m.obj)
+  return { obj: g, animations: list.flatMap(m => m.animations) }
+}
+
 async function loadModel(url) {
   const ext = url.split('?')[0].split('.').pop().toLowerCase()
   if (ext === 'glb' || ext === 'gltf') {
@@ -76,7 +84,7 @@ export async function showModel({ url, name, openModal, closeModal, toast, onThu
   loop()
 
   let anims
-  try { ({ obj, animations: anims } = await loadModel(url)) } catch (e) { msg.textContent = 'Не открылась: ' + (e.message || e); return }
+  try { ({ obj, animations: anims } = await loadAll(url)) } catch (e) { msg.textContent = 'Не открылась: ' + (e.message || e); return }
   if (disposed) { disposeTree(obj); return }
   if (anims.length) { mixer = new THREE.AnimationMixer(obj); mixer.clipAction(anims[0]).play() }
   scene.add(obj); msg.remove()
@@ -116,7 +124,7 @@ export function makeThumb(url) {
       renderer.setSize(640, 480, false); renderer.outputColorSpace = THREE.SRGBColorSpace
       const scene = new THREE.Scene(); scene.background = new THREE.Color(0x0b0d11); lights(scene)
       const cam = new THREE.PerspectiveCamera(35, 4 / 3, 0.01, 200)
-      const m = await loadModel(url); obj = m.obj
+      const m = await loadAll(url); obj = m.obj
       scene.add(obj); frame(obj, cam, null)
       renderer.render(scene, cam)
       return await new Promise(r => canvas.toBlob(r, 'image/png'))

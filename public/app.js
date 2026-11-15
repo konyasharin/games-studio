@@ -716,26 +716,30 @@ async function boardPage(view, pid, bid, tok) {
   }
   // the preview prefers the textured model; a thumbnail made from another file is rebuilt in the background
   const thumbing = new Set()
+  // the preview shows every file of the newest slot (textured if any, else the mesh) together
   function modelThumb(c, f) {
+    const slotFiles = c.type === 'model' ? ((c.textured || []).length ? c.textured : c.mesh || []) : f ? [f] : []
+    const files = slotFiles.filter(x => /\.(glb|gltf|fbx|obj)$/i.test(x.file))
     if (!f) return h('div', { class: 'model-thumb' }, 'Модели пока нет')
-    const viewable = /\.(glb|gltf|fbx|obj)$/i.test(f.file)
-    if (viewable && c.thumbOf !== f.file && !thumbing.has(c.id + f.file)) {
-      thumbing.add(c.id + f.file)
-      import('/viewer.js').then(({ makeThumb }) => makeThumb(fileUrl(f.file)))
-        .then(blob => blob && api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(f.file)}`, blob, { raw: true, quiet: true }))
-        .then(() => refresh()).catch(e => console.warn('thumb', f.file, e))
+    const key = files.map(x => x.file).join('|')
+    if (files.length && c.thumbOf !== key && !thumbing.has(c.id + key)) {
+      thumbing.add(c.id + key)
+      import('/viewer.js').then(({ makeThumb }) => makeThumb(files.map(x => fileUrl(x.file))))
+        .then(blob => blob && api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(key)}`, blob, { raw: true, quiet: true }))
+        .then(() => refresh()).catch(e => console.warn('thumb', key, e))
     }
-    const textured = (c.textured || []).some(x => x.file === f.file)
-    return h('div', { class: 'model-thumb', style: c.thumb ? { backgroundImage: `url("${fileUrl(c.thumb)}")` } : {}, onclick: () => viewable ? openViewer(c, f) : openFile(f.file, 'blender') },
-      c.thumb ? '' : viewable ? 'Открыть 3D' : 'Открыть в Blender',
+    const textured = c.type === 'model' && (c.textured || []).length > 0
+    return h('div', { class: 'model-thumb', style: c.thumb ? { backgroundImage: `url("${fileUrl(c.thumb)}")` } : {}, onclick: () => files.length ? openViewer(c, files.length > 1 ? files : f) : openFile(f.file, 'blender') },
+      c.thumb ? '' : files.length ? 'Открыть 3D' : 'Открыть в Blender',
       c.type === 'model' ? h('span', { class: 'thumb-tag' + (textured ? ' tex' : '') }, textured ? 'с текстурой' : 'сетка') : null)
   }
   async function openViewer(c, f) {
     const { showModel } = await import('/viewer.js')
-    showModel({ url: fileUrl(f.file), name: f.name || f.file, openModal, closeModal, toast,
+    const list = [].concat(f)
+    showModel({ url: list.map(x => fileUrl(x.file)), name: list.map(x => x.name || x.file.split('/').pop()).join(' + '), openModal, closeModal, toast,
       hasThumb: !!c.thumb,
-      onOpen: how => openFile(f.file, how),
-      onThumb: async blob => { try { await api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(f.file)}`, blob, { raw: true, quiet: true }); refresh() } catch {} } })
+      onOpen: how => openFile(list[0].file, how),
+      onThumb: async blob => { try { await api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(list.map(x => x.file).join('|'))}`, blob, { raw: true, quiet: true }); refresh() } catch {} } })
   }
 
   // keep in sync with the server (worker results arrive here)
