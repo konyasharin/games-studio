@@ -411,6 +411,23 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/files', async (req, m, 
   })
 })
 
+// a file already inside the Projects folder, attached without copying: {slot, file: 'game/art/x.glb', name?}
+route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/attach', async (req, m) => {
+  const p = await project(m.pid); const { slot = 'files', file, name } = await json(req)
+  if (!['variants', 'files', 'mesh', 'textured'].includes(slot)) throw httpError(400, 'bad slot')
+  const abs = path.resolve(ROOT, String(file || ''))
+  if (!inside(ROOT, abs)) throw httpError(403, 'outside')
+  const st = await fsp.stat(abs).catch(() => null)
+  if (!st?.isFile()) throw httpError(404, 'нет файла ' + file)
+  const rel = toRel(abs)
+  return mutateBoard(p, m.bid, b => {
+    const c = findCard(b, m.cid)
+    if ((c[slot] || []).some(x => x.file === rel)) return c
+    c[slot] = [...(c[slot] || []), { file: rel, name: name || path.basename(abs), at: now(), size: st.size }]
+    return c
+  })
+})
+
 // a zip from Tripo/Modddif: extract next to it, point the card at the first model file inside
 function unzipModel(zip) {
   const out = zip.replace(/\.zip$/i, '')
