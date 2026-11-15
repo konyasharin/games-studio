@@ -464,11 +464,15 @@ route('DELETE', '/api/projects/:pid/boards/:bid/cards/:cid', async (req, m) => {
 })
 // one variant: hide/show
 route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/variant', async (req, m) => {
-  const p = await project(m.pid); const { file, hidden } = await json(req)
+  const p = await project(m.pid); const { file, hidden, view } = await json(req)
   return mutateBoard(p, m.bid, b => {
     const c = findCard(b, m.cid)
-    for (const v of c.variants || []) if (v.file === file) v.hidden = !!hidden
+    for (const v of c.variants || []) if (v.file === file) {
+      if (hidden !== undefined) v.hidden = !!hidden
+      if (['front', 'back', 'left', 'right', 'sheet'].includes(view)) v.view = view
+    }
     if (hidden && c.chosen === file) c.chosen = null
+    if (hidden && c.picks) for (const k in c.picks) if (c.picks[k] === file) c.picks[k] = null
     return c
   })
 })
@@ -602,7 +606,8 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/generate', async (req, 
       const x = b.cards.find(k => k.id === l.from)
       if (!x || seen.has(x.id)) continue
       seen.add(x.id)
-      if (x.chosen) inputs.push(x.chosen, ...(x.extraInputs || []))
+      const picked = [x.chosen, ...Object.values(x.picks || {})].filter(Boolean)
+      if (picked.length) inputs.push(...new Set([...picked, ...(x.extraInputs || [])]))
       else up(x.id)
     }
   }
@@ -610,8 +615,14 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/generate', async (req, 
   inputs.push(...(c.inputs || []))
   if ([...jobs.values()].some(j => j.card === c.id && active(j))) throw httpError(409, 'уже в очереди')
   const kind = ['images', 'split', 'note'].includes(opts.kind) ? opts.kind : c.type === 'split' ? 'split' : 'images'
+  const SIDES = ['front', 'back', 'left', 'right']
+  const sides = (Array.isArray(opts.sides) ? opts.sides : c.sides || ['front']).filter(x => SIDES.includes(x))
+  if (kind === 'images' && !sides.length) throw httpError(400, 'выбери хотя бы одну сторону')
+  // the card's own chosen front is the identity reference for its other sides
+  const own = c.picks?.front || c.chosen
+  if (own && sides.some(x => x !== 'front') && !inputs.includes(own)) inputs.unshift(own)
   const j = { id: id(), kind, project: p.id, projectDir: p.dir, board: m.bid, card: c.id, cardTitle: c.title, status: 'queued', created: now(), log: [],
-    prompt: typeof opts.prompt === 'string' ? opts.prompt : c.prompt || '', count: Math.max(1, Math.min(8, Number(opts.count ?? c.count ?? 4) || 4)), inputs, views: c.views }
+    prompt: typeof opts.prompt === 'string' ? opts.prompt : c.prompt || '', count: Math.max(1, Math.min(8, Number(opts.count ?? c.count ?? 4) || 4)), inputs, sides }
   jobs.set(j.id, j)
   await saveJob(j)
   setTimeout(workerTick, 50)

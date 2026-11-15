@@ -364,7 +364,8 @@ async function boardPage(view, pid, bid, tok) {
   const nodes = new Map()
   let dragging = null, linking = null, editing = new Set()
   const jobOf = cid => B.jobs.filter(j => j.card === cid).sort((a, b) => a.created.localeCompare(b.created)).at(-1)
-  const sig = c => JSON.stringify([c, jobOf(c.id)])
+  const filters = new Map() // per card: which side's variants the strip shows
+  const sig = c => JSON.stringify([c, jobOf(c.id), filters.get(c.id)])
 
   function render() {
     const seen = new Set()
@@ -483,37 +484,73 @@ async function boardPage(view, pid, bid, tok) {
   }
   const busy = c => inflight.has(c.id) || ['queued', 'running'].includes(jobOf(c.id)?.status)
 
+  // sides of an object: each generated picture is one strict view; the front is the main one
+  const SIDES = [['front', 'Спереди', 'Ф'], ['back', 'Сзади', 'З'], ['left', 'Слева', 'Л'], ['right', 'Справа', 'П']]
+  const SIDE = Object.fromEntries(SIDES.map(([k, n, s]) => [k, { name: n, short: s }]))
+  SIDE.sheet = { name: 'Лист с 4 сторонами', short: '4' }
+  const viewOf = v => v.view && SIDE[v.view] ? v.view : 'front'
+  const picksOf = c => ({ ...(c.picks || {}), front: c.picks?.front || c.chosen || null })
+  const pick = (c, v) => { const side = viewOf(v); const picks = { ...picksOf(c), [side]: v.file }; patch(c, side === 'front' || side === 'sheet' ? { picks, chosen: v.file } : { picks }) }
+  const sideIcon = side => h('span', { class: 'side-ic side-' + side, title: SIDE[side].name }, SIDE[side].short)
+
   function lightbox(c, v) {
+    const side = viewOf(v), picked = picksOf(c)[side] === v.file
     openModal(h('div', { class: 'lightbox' }, h('img', { src: fileUrl(v.file) }),
-      h('div', { class: 'row' },
-        h('button', { class: 'btn primary', onclick: () => { closeModal(); patch(c, { chosen: v.file }) } }, c.chosen === v.file ? 'Выбрано' : 'Выбрать этот'),
+      h('div', { class: 'row' }, sideIcon(side), h('span', { class: 'more' }, SIDE[side].name),
+        h('button', { class: 'btn primary', onclick: () => { closeModal(); pick(c, v) } }, picked ? 'Выбрано' : side === 'front' || side === 'sheet' ? 'Сделать главным' : `Выбрать для вида «${SIDE[side].name.toLowerCase()}»`),
+        h('div', { class: 'seg', title: 'Какая это сторона (поправь, если определилась неверно)' }, ...[...SIDES.map(x => x[0]), 'sheet'].map(k => h('button', { class: k === side ? 'on' : '', onclick: () => { closeModal(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, view: k }).then(refresh).catch(() => {}) } }, SIDE[k].short))),
         h('a', { class: 'btn', href: fileUrl(v.file), target: '_blank' }, 'Открыть файл'),
         h('button', { class: 'btn ghost', onclick: closeModal }, 'Закрыть'))))
   }
 
   function imagesBody(c, b) {
     const vars = (c.variants || []).filter(v => !v.hidden)
-    const hero = c.chosen ? h('div', { class: 'hero', style: { backgroundImage: `url("${fileUrl(c.chosen)}")` }, onclick: () => lightbox(c, { file: c.chosen }) })
-      : h('div', { class: 'hero empty' }, vars.length ? 'Выбери вариант ниже' : 'Нет картинок. Сгенерируй или перетащи файл сюда.')
-    b.append(hero)
+    const picks = picksOf(c)
+    const main = picks.front
+    b.append(main ? h('div', { class: 'hero', style: { backgroundImage: `url("${fileUrl(main)}")` }, onclick: () => lightbox(c, vars.find(v => v.file === main) || { file: main, view: 'front' }) }, h('span', { class: 'hero-side' }, sideIcon(viewOf(vars.find(v => v.file === main) || { view: 'front' }))))
+      : h('div', { class: 'hero empty' }, vars.length ? 'Выбери главный вид (спереди) ниже' : 'Нет картинок. Сгенерируй или перетащи файл сюда.'))
+    // the other sides: small, under the main view
+    const others = SIDES.slice(1)
+    if (vars.some(v => viewOf(v) !== 'front') || others.some(([k]) => picks[k])) {
+      b.append(h('div', { class: 'side-row' }, ...others.map(([k, name]) => {
+        const f = picks[k]
+        return h('div', { class: 'side-slot' + (f ? '' : ' empty') + (filters.get(c.id) === k ? ' on' : ''), title: name + (f ? '' : ': не выбрано'),
+          style: f ? { backgroundImage: `url("${fileUrl(f)}")` } : {}, onclick: () => { filters.set(c.id, filters.get(c.id) === k ? null : k); render() } }, sideIcon(k), f ? null : h('span', {}, name))
+      })))
+    }
     if (vars.length) {
-      const showAll = c._all
-      const list = showAll ? vars : vars.slice(-8)
-      b.append(h('div', { class: 'strip' }, ...list.slice().reverse().map(v => h('div', { class: 'thumb-v' + (v.file === c.chosen ? ' ch' : ''), title: v.prompt || '', style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v) },
-        h('button', { class: 'x', title: 'Скрыть вариант', onclick: e => { e.stopPropagation(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: true }).then(refresh).catch(() => {}) } }, '✕')))))
-      if (vars.length > 8) b.append(h('span', { class: 'more' }, `ещё ${vars.length - 8} вариантов в истории`))
+      const counts = {}; for (const v of vars) counts[viewOf(v)] = (counts[viewOf(v)] || 0) + 1
+      const filter = filters.get(c.id) && counts[filters.get(c.id)] ? filters.get(c.id) : null
+      const tabs = Object.keys(counts).length > 1 ? h('div', { class: 'side-tabs' },
+        h('button', { class: filter ? '' : 'on', onclick: () => { filters.set(c.id, null); render() } }, `Все ${vars.length}`),
+        ...[...SIDES.map(x => x[0]), 'sheet'].filter(k => counts[k]).map(k => h('button', { class: filter === k ? 'on' : '', onclick: () => { filters.set(c.id, k); render() } }, sideIcon(k), ' ', counts[k]))) : null
+      if (tabs) b.append(tabs)
+      const list = (filter ? vars.filter(v => viewOf(v) === filter) : vars).slice(-8)
+      b.append(h('div', { class: 'strip' }, ...list.slice().reverse().map(v => {
+        const side = viewOf(v), isPick = picks[side] === v.file
+        return h('div', { class: 'thumb-v' + (isPick ? ' ch' : ''), title: (SIDE[side].name + (v.prompt ? ': ' + v.prompt : '')).slice(0, 300), style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v) },
+          sideIcon(side),
+          h('button', { class: 'x', title: 'Скрыть вариант', onclick: e => { e.stopPropagation(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: true }).then(refresh).catch(() => {}) } }, '✕'))
+      })))
+      const shown = filter ? counts[filter] : vars.length
+      if (shown > 8) b.append(h('span', { class: 'more' }, `ещё ${shown - 8} в истории`))
     }
     const ta = h('textarea', { class: 'prompt', placeholder: 'Промпт (по-русски). Пусто — Claude напишет сам по названию и связанным карточкам.' }); ta.value = c.prompt || ''
     ta.addEventListener('change', () => patch(c, { prompt: ta.value }))
     b.append(ta)
-    const count = h('select', { class: 'count', title: 'Сколько вариантов' }, ...[1, 2, 3, 4, 5, 6, 7, 8].map(k => h('option', { value: k, selected: (c.count || 4) === k }, k + ' шт')))
+    const chosenSides = c.sides?.length ? c.sides : ['front']
+    const sidePick = h('div', { class: 'seg sides', title: 'Какие стороны генерировать: каждая отдельной картинкой, строго, не в три четверти' },
+      ...SIDES.map(([k, name, short]) => h('button', { class: chosenSides.includes(k) ? 'on' : '', title: name, onclick: () => {
+        const next = chosenSides.includes(k) ? chosenSides.filter(x => x !== k) : [...chosenSides, k]
+        if (next.length) patch(c, { sides: SIDES.map(x => x[0]).filter(x => next.includes(x)) })
+      } }, short)))
+    const count = h('select', { class: 'count', title: 'Вариантов на каждую сторону' }, ...[1, 2, 3, 4, 5, 6, 7, 8].map(k => h('option', { value: k, selected: (c.count || 4) === k }, k + ' шт')))
     count.addEventListener('change', () => patch(c, { count: Number(count.value) }))
-    const views = h('div', { class: 'seg', title: 'Один вид или лист с 4 сторонами' },
-      h('button', { class: (c.views || 4) === 1 ? 'on' : '', onclick: () => patch(c, { views: 1 }) }, '1 вид'),
-      h('button', { class: (c.views || 4) === 4 ? 'on' : '', onclick: () => patch(c, { views: 4 }) }, '4 стороны'))
     const freeze = h('button', { class: 'icon-btn' + (c.frozen ? ' on' : ''), title: c.frozen ? 'Разморозить' : 'Заморозить: запретить перегенерацию', onclick: () => patch(c, { frozen: !c.frozen }) }, c.frozen ? '🔒' : '🔓')
-    const gen = h('button', { class: 'btn primary sm', disabled: c.frozen || busy(c), onclick: () => { patch(c, { prompt: ta.value }); generate(c, { prompt: ta.value, count: Number(count.value) }) } }, vars.length ? 'Перегенерировать' : 'Сгенерировать')
-    b.append(h('div', { class: 'row' }, count, views, h('span', { class: 'grow' }), freeze, gen))
+    const total = chosenSides.length * Number(count.value)
+    const gen = h('button', { class: 'btn primary sm', disabled: c.frozen || busy(c), title: `${total} картинок: ${chosenSides.map(k => SIDE[k].name.toLowerCase()).join(', ')}`,
+      onclick: () => { patch(c, { prompt: ta.value }); generate(c, { prompt: ta.value, count: Number(count.value), sides: chosenSides }) } }, vars.length ? `Ещё ${total}` : `Сгенерировать ${total}`)
+    b.append(h('div', { class: 'row' }, sidePick, count, h('span', { class: 'grow' }), freeze, gen))
     const st = statusLine(c); if (st) b.append(st)
   }
 

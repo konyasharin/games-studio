@@ -27,11 +27,20 @@ Rules that always hold:
   "cardPatch": {...optional fields to set on the card...}}`. Always call it, also on failure.
 
 ## kind = "images"
-Generate `count` images (1..8) for the card. `inputs` are local paths of reference images (the parent card's
-chosen picture): attach them all to the Flow prompt as reference images. `prompt` is what the user or Claude
-wrote; if it is empty, write one from the card title, the board context and the parent image. When `views` is 4,
-every image is ONE sheet with the same object from 4 sides (front, left side, back, right side) in one row, same
-pose, same scale, same details, plain light-grey background, even soft light, no shadows, no text.
+Generate `count` images for EACH side in `sides` (`front`, `back`, `left`, `right`): every image shows ONE side
+of the object, nothing else on it. `inputs` are local paths of reference images (the chosen pictures of the parent
+cards and, for the non-front sides, this card's own chosen front view): attach them all to the Flow prompt.
+`prompt` is what the user or Claude wrote; if it is empty, write one from the card title, the board context and
+the parent image. Add to every prompt, by side (Russian):
+- front: «строго вид спереди, анфас, объект смотрит прямо в камеру, ортографическая проекция, без поворота и без
+  перспективы, не в три четверти»
+- back: «строго вид сзади, ровно со спины, ортографическая проекция, без поворота, не в три четверти»
+- left: «строго вид слева, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
+- right: «строго вид справа, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
+and always: «та же поза, те же пропорции и детали, что на референсе, ничего не добавлять; светло-серый ровный
+фон, мягкий ровный свет, без теней, без текста, объект целиком в кадре». Run each side as its own generation.
+Before posting, look at each result: if it is clearly turned (three-quarter) instead of a strict side, generate
+that one again (at most twice), and say so in the log.
 1. Open `flowUrl` in a new tab (tabs_create_mcp + navigate). Choose image generation with `imageModel`.
 2. Attach the input images (file_upload with the local paths), type the prompt, set the number of outputs (Flow
    gives at most 4 per run: for 5..8 run twice). Generate and wait until the new images are finished.
@@ -41,13 +50,14 @@ pose, same scale, same details, plain light-grey background, even soft light, no
    ```js
    const rx = window.open('{api}/receiver.html', 'studio-rx')
    await new Promise(r => { const f = e => { if (e.data?.type === 'studio-receiver-ready') { removeEventListener('message', f); r() } }; addEventListener('message', f); setTimeout(r, 4000) })
-   const send = (blob, seq) => new Promise(res => {
+   const send = (blob, seq, SIDE) => new Promise(res => {
      const f = e => { if (e.data?.type === 'studio-image-ack' && e.data.seq === seq) { removeEventListener('message', f); res(e.data) } }
      addEventListener('message', f)
-     rx.postMessage({ type: 'studio-image', job: '<job id>', token: '<token>', ext: 'png', prompt: PROMPT, seq, data: blob }, '{api}')
+     rx.postMessage({ type: 'studio-image', job: '<job id>', token: '<token>', ext: 'png', prompt: PROMPT, view: SIDE, seq, data: blob }, '{api}')
      setTimeout(() => res({ ok: false, error: 'timeout' }), 20000)
    })
-   // for each new image element img: const b = await (await fetch(img.src)).blob(); await send(b, i)
+   // for each new image element img: const b = await (await fetch(img.src)).blob(); await send(b, i, side)
+   // the message must carry the side: { ..., view: 'front'|'back'|'left'|'right' }
    ```
    Check every ack is `ok`; close the receiver tab afterwards (`rx.close()`).
 4. Complete with status "done", `cardPatch: {"prompt": "<the prompt you used>"}` if the card's prompt was empty.
