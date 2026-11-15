@@ -73,9 +73,15 @@ Do not change the card's prompt in this kind.
 1. Open `flowUrl` in a new tab (tabs_create_mcp + navigate). Choose image generation with `imageModel`.
 2. Attach the input images (file_upload with the local paths), type the prompt, set the number of outputs (Flow
    gives at most 4 per run: for 5..8 run twice). Generate and wait until the new images are finished.
-3. Hand the new images to the board. Chrome blocks requests from the Flow page to 127.0.0.1, so do it through
-   the board's receiver page, all inside the Flow tab with javascript_tool (never the browser's download button,
-   never change Chrome settings):
+3. Hand the new images to the board from the Flow tab with javascript_tool (never the browser's download button,
+   never change Chrome settings). First try the direct way, it opens no tabs (works once the author allowed
+   flow.google.com local network access in Chrome):
+   ```js
+   const b = await (await fetch(img.src)).blob()
+   await fetch('{api}/api/jobs/<job id>/image?ext=png&view=' + SIDE + '&prompt=' + encodeURIComponent(PROMPT) + '&token=<token>', { method: 'POST', body: b })
+   ```
+   Only if that throws (Chrome blocks it), use the receiver tab, opened ONCE per run and reused for every image,
+   and closed at the end; it takes focus from the author, so keep it short:
    ```js
    const rx = window.open('{api}/receiver.html', 'studio-rx')
    await new Promise(r => { const f = e => { if (e.data?.type === 'studio-receiver-ready') { removeEventListener('message', f); r() } }; addEventListener('message', f); setTimeout(r, 4000) })
@@ -85,10 +91,9 @@ Do not change the card's prompt in this kind.
      rx.postMessage({ type: 'studio-image', job: '<job id>', token: '<token>', ext: 'png', prompt: PROMPT, view: SIDE, seq, data: blob }, '{api}')
      setTimeout(() => res({ ok: false, error: 'timeout' }), 20000)
    })
-   // for each new image element img: const b = await (await fetch(img.src)).blob(); await send(b, i, side)
-   // the message carries the side (view) and PROMPT = the full text typed into Flow for that image, side wording included
    ```
-   Check every ack is `ok`; close the receiver tab afterwards (`rx.close()`).
+   Either way the image carries its side (`view`) and PROMPT = the full text typed into Flow for that image.
+   Check every answer is ok; close the receiver tab if you opened it (`rx.close()`); log which way you used.
 4. Complete with status "done" (no cardPatch).
 
 ## kind = "split"

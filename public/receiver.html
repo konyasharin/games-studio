@@ -29,7 +29,9 @@ window.addEventListener('message', async e => {
     log(`✓ картинка ${m.seq ?? ''} принята`); reply({ ok: true, file: j.file })
   } catch (err) { log(`✗ ${err.message}`); reply({ ok: false, error: err.message }) }
 })
-if (window.opener) window.opener.postMessage({ type: 'studio-receiver-ready' }, '*')
+// works as a tab opened by the Flow page or, without any tab, as a hidden iframe inside it
+const host = window.parent !== window ? window.parent : window.opener
+if (host) host.postMessage({ type: 'studio-receiver-ready' }, '*')
 </script>
 </body>
 </html>
