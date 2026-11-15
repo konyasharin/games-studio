@@ -453,3 +453,44 @@ body.textured .board { background-image: radial-gradient(circle, color-mix(in sr
 .side a.side-cover { display: flex; flex-direction: column; justify-content: flex-end; border-radius: 0; padding: 14px 14px 12px; color: var(--fg); }
 .side a.side-cover:hover { background-color: transparent; filter: brightness(1.06); }
 .side-cover .sc-title { line-height: 1.25; }
+
+/* ---------- theme stylistics (set per project on body) ---------- */
+:root { --r-sm: 8px; --track: 0em; --accent3: #5a9cf0; }
+.btn, .seg, select.count, textarea.prompt, .status, .slot, .hero, .model-thumb, .part, .job, .toast, .assist-pop, .queue-panel, .modal-box { border-radius: var(--r-sm); }
+.card { border-radius: calc(var(--r) + 2px); }
+.editor .box, .editor .stat, .editor .flow .step, .editor .callout, .tile { border-radius: var(--r); }
+body.hd-upper h1, body.hd-upper h2, body.hd-upper .editor h3, body.hd-upper .side h3, body.hd-upper .tile h2, body.hd-upper .sc-title { text-transform: uppercase; letter-spacing: var(--track); }
+body.hd-upper .editor h1 { letter-spacing: calc(var(--track) * .6); }
+.editor a, .chat-sess a { color: var(--accent3); }
+.editor .callout { border-left-color: var(--accent3); }
+.editor .box.blue { border-color: color-mix(in srgb, var(--accent3) 45%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--accent3) 9%, transparent), transparent 70%), var(--bg2); }
+details.tools .tool b { color: var(--accent3); }
+/* glow */
+body.glow h1, body.glow .brand span { text-shadow: 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent); }
+body.glow .btn.primary { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent), 0 0 22px color-mix(in srgb, var(--accent) 45%, transparent); }
+body.glow .editor .doc-hero { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 40px color-mix(in srgb, var(--accent) 12%, transparent); }
+body.glow .editor ol.timeline li::before, body.glow .pin { box-shadow: 0 0 10px var(--accent); }
+body.glow .side a.cur { box-shadow: inset 3px 0 0 var(--accent), 0 0 18px color-mix(in srgb, var(--accent) 14%, transparent); }
+body.glow .editor h2 { border-top-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+/* cut corners (tech look) on blocks that never hold things sticking out */
+body.cut .tile, body.cut .editor .box, body.cut .editor .stat, body.cut .editor .doc-hero, body.cut .theme-card, body.cut .editor .flow .step {
+  border-radius: 0; clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px); }
+body.cut .btn { border-radius: 2px; }
+/* background patterns behind pages and the board */
+body.bg-stars main { background-image: radial-gradient(1px 1px at 12% 18%, rgba(255,255,255,.55), transparent 60%), radial-gradient(1px 1px at 68% 34%, rgba(255,255,255,.4), transparent 60%), radial-gradient(1.5px 1.5px at 38% 72%, rgba(255,255,255,.45), transparent 60%), radial-gradient(1px 1px at 86% 82%, rgba(255,255,255,.35), transparent 60%), radial-gradient(1px 1px at 52% 8%, rgba(255,255,255,.3), transparent 60%), radial-gradient(120% 80% at 80% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%), radial-gradient(90% 70% at 0% 110%, color-mix(in srgb, var(--accent3) 10%, transparent), transparent 55%); background-size: 380px 380px, 520px 520px, 610px 610px, 450px 450px, 700px 700px, 100% 100%, 100% 100%; background-attachment: fixed; }
+body.bg-grid main { background-image: linear-gradient(color-mix(in srgb, var(--accent3) 7%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--accent3) 7%, transparent) 1px, transparent 1px), radial-gradient(100% 70% at 50% -10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%); background-size: 40px 40px, 40px 40px, 100% 100%; background-attachment: fixed; }
+body.bg-scan main { background-image: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px), radial-gradient(120% 80% at 50% -20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%); background-attachment: fixed; }
+body.bg-paper main { background-image: radial-gradient(130% 90% at 50% 0%, rgba(255,235,200,.05), transparent 60%), radial-gradient(160% 120% at 50% 120%, rgba(0,0,0,.5), transparent 55%); }
+body.bg-stars .board, body.bg-grid .board, body.bg-scan .board { background-color: transparent; }
+body.bg-stars .board { background-image: radial-gradient(circle, color-mix(in srgb, var(--line2) 70%, transparent) 1px, transparent 1px); }
+.proj-main, .page { background: transparent; }
+.theme-col { display: flex; flex-direction: column; gap: 8px; }
+.theme-range { display: grid !important; grid-template-columns: 1fr 140px 40px; align-items: center; gap: 8px; flex-direction: row !important; }
+.theme-range b { color: var(--fg); font-weight: 600; font-size: 12px; }
+.theme-col select { background: var(--bg2); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; color: var(--fg); }
+.subnav { display: flex; flex-direction: column; margin: 2px 0 8px 10px; padding-left: 8px; border-left: 1px solid var(--line2); }
+.side .subnav a { padding: 4px 8px; font-size: 12.5px; color: var(--dim); border-radius: 6px; line-height: 1.35; }
+.side .subnav a:hover { color: var(--fg); background: var(--panel); }
+.side .subnav a.cur { color: var(--accent2); background: color-mix(in srgb, var(--accent) 10%, transparent); font-weight: 600; box-shadow: none; }
+.subnav:empty { display: none; }
+.side { overflow-y: auto; }

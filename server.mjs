@@ -668,7 +668,7 @@ route('PATCH', '/api/projects/:pid', async (req, m) => {
   })
 })
 // a project's look: colours (#hex), Google font names, a logo and a cover picture from the project folder
-const THEME_COLORS = ['bg', 'bg2', 'panel', 'panel2', 'line', 'line2', 'fg', 'muted', 'dim', 'accent', 'accent2']
+const THEME_COLORS = ['bg', 'bg2', 'panel', 'panel2', 'line', 'line2', 'fg', 'muted', 'dim', 'accent', 'accent2', 'accent3']
 function cleanTheme(t) {
   const out = { preset: String(t.preset || 'custom').slice(0, 30), colors: {} }
   for (const k of THEME_COLORS) if (/^#[0-9a-fA-F]{6}$/.test(t.colors?.[k] || '')) out.colors[k] = t.colors[k]
@@ -676,6 +676,9 @@ function cleanTheme(t) {
   for (const k of ['logo', 'cover']) if (typeof t[k] === 'string' && inside(ROOT, path.resolve(ROOT, t[k])) && fs.existsSync(path.resolve(ROOT, t[k]))) out[k] = t[k]
   if (typeof t.tagline === 'string') out.tagline = t.tagline.slice(0, 120)
   if (typeof t.texture === 'boolean') out.texture = t.texture
+  const st = t.style || {}
+  out.style = { radius: Math.max(0, Math.min(24, Number(st.radius) || 0)), track: Math.max(0, Math.min(0.3, Number(st.track) || 0)),
+    upper: !!st.upper, glow: !!st.glow, cut: !!st.cut, bg: ['none', 'dots', 'stars', 'grid', 'scan', 'paper'].includes(st.bg) ? st.bg : 'dots' }
   return out
 }
 route('POST', '/api/projects/:pid/brand', async (req, m, url) => {

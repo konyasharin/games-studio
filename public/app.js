@@ -163,8 +163,10 @@ async function projectPage(view, pid, sid, tok) {
   const T = p.theme || {}
   const cover = T.cover ? h('a', { class: 'side-cover', href: `#/p/${pid}/${p.sections[0]?.id || '3d'}`, style: { backgroundImage: `url("${fileUrl(T.cover)}")` } },
     h('span', { class: 'sc-title' }, p.name || p.dir), T.tagline ? h('span', { class: 'sc-tag' }, T.tagline) : null) : null
+  // the open section shows its parts right under it in the menu (page headings, or the boards of a 3D section)
+  const subnav = h('div', { class: 'subnav' })
   const side = h('aside', { class: 'side' }, cover, h('h3', {}, 'Разделы'),
-    ...p.sections.map(s => h('a', { href: `#/p/${pid}/${s.id}`, class: s.id === sec.id ? 'cur' : '' }, s.title)),
+    ...p.sections.flatMap(s => s.id === sec.id ? [h('a', { href: `#/p/${pid}/${s.id}`, class: 'cur' }, s.title), subnav] : [h('a', { href: `#/p/${pid}/${s.id}` }, s.title)]),
     h('a', { href: 'javascript:void 0', onclick: async () => {
       const v = await prompt2('Новый раздел', [{ key: 'title', label: 'Название' }, { key: 'kind', label: 'Тип', options: [['notes', 'Страница (текст)'], ['boards', 'Доски (как 3D)']] }])
       if (!v?.title) return
@@ -177,8 +179,11 @@ async function projectPage(view, pid, sid, tok) {
   view.append(h('div', { class: 'proj' }, side, main))
   ctxNow = sec.kind === 'boards' ? { pid: p.id, kind: 'page' } : { pid: p.id, kind: 'notes', section: sec.id, sectionTitle: sec.title }
   if (sec.kind === 'theme') { ctxNow = { pid: p.id, kind: 'page' }; themePage(main, p, { api, h, toast, fileUrl, onSaved: () => {} }); return {} }
-  if (sec.kind === 'boards') return boardsList(main, p, sec)
-  return notesPage(main, p, sec, tok)
+  if (sec.kind === 'boards') {
+    for (const b of (p.boards || []).filter(b => (b.section || '3d') === sec.id)) subnav.append(h('a', { href: `#/p/${pid}/b/${b.id}` }, b.name))
+    return boardsList(main, p, sec)
+  }
+  return notesPage(main, p, sec, tok, subnav)
 }
 
 async function boardsList(main, p, sec) {
@@ -204,7 +209,7 @@ async function boardsList(main, p, sec) {
   return {}
 }
 
-async function notesPage(main, p, sec, tok) {
+async function notesPage(main, p, sec, tok, subnav) {
   const { html, mtime: mtime0 } = await api('GET', `/api/projects/${p.id}/notes/${sec.id}`)
   if (stale(tok)) return
   let mtime = mtime0
@@ -225,12 +230,37 @@ async function notesPage(main, p, sec, tok) {
       if (r.same) return
       const dirty = saved.textContent !== 'Сохранено' || document.activeElement === ed
       if (dirty && !force) { banner.hidden = false; return }
-      ed.innerHTML = r.html; mtime = r.mtime; banner.hidden = true; saved.textContent = 'Сохранено'
+      ed.innerHTML = r.html; mtime = r.mtime; banner.hidden = true; saved.textContent = 'Сохранено'; buildSub()
       if (!force) toast('Страница обновлена'); assist.pageChanged()
     } catch {}
   }
   const poll = setInterval(() => !document.hidden && load(false), 4000)
   main.append(h('div', { class: 'page' }, bar, banner, ed))
+  // in-page anchors (#id) scroll instead of changing the app's route
+  ed.addEventListener('click', e => {
+    const a = e.target.closest('a[href^="#"]'); if (!a || a.getAttribute('href').startsWith('#/')) return
+    e.preventDefault(); ed.querySelector(CSS.escape ? '#' + CSS.escape(a.getAttribute('href').slice(1)) : a.getAttribute('href'))?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+  const heads = () => [...ed.querySelectorAll('h2')].filter(x => !x.closest('details') && x.textContent.trim())
+  function buildSub() {
+    if (!subnav) return
+    subnav.innerHTML = ''
+    heads().forEach((x, i) => {
+      if (!x.id) x.id = 'part-' + i
+      subnav.append(h('a', { href: 'javascript:void 0', 'data-for': x.id, onclick: () => x.scrollIntoView({ behavior: 'smooth', block: 'start' }) }, x.textContent.trim().slice(0, 60)))
+    })
+    spy()
+  }
+  const scroller = main
+  function spy() {
+    if (!subnav) return
+    const hs = heads(); let cur = hs[0]
+    for (const x of hs) if (x.getBoundingClientRect().top < 160) cur = x
+    for (const a of subnav.children) a.classList.toggle('cur', a.dataset.for === cur?.id)
+  }
+  scroller.addEventListener('scroll', () => requestAnimationFrame(spy), { passive: true })
+  buildSub()
+  ed.addEventListener('input', debounce(buildSub, 800))
   window.addEventListener('beforeunload', save)
   return { stop: () => { clearInterval(poll); window.removeEventListener('beforeunload', save); if (saved.textContent !== 'Сохранено') api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }).catch(() => {}) } }
 }

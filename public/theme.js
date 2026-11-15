@@ -5,21 +5,21 @@ export const FONTS = [ // Google fonts with Cyrillic
   'Neucha', 'Marck Script', 'Press Start 2P', 'Jura', 'Tektur', 'M PLUS Rounded 1c', 'Nunito', 'Rubik', 'Space Grotesk',
 ]
 export const PRESETS = {
-  studio: { name: 'Studio (стандарт)', fontDisplay: 'Space Grotesk', fontBody: 'Inter',
-    colors: { bg: '#0f1115', bg2: '#151820', panel: '#1b1f29', panel2: '#222734', line: '#2c3241', line2: '#3a4155', fg: '#e9ecf2', muted: '#9098aa', dim: '#646c7e', accent: '#e2384d', accent2: '#ff6b7d' } },
-  fairy: { name: 'Сказка / фэнтези (пергамент, золото)', fontDisplay: 'Cormorant Garamond', fontBody: 'EB Garamond', texture: true,
-    colors: { bg: '#15110d', bg2: '#1c1611', panel: '#221b15', panel2: '#2c231b', line: '#3a2f24', line2: '#4d3e2f', fg: '#efe6d6', muted: '#b5a68e', dim: '#7d705e', accent: '#c9a45c', accent2: '#e4c47e' } },
-  space: { name: 'Космос / sci-fi', fontDisplay: 'Exo 2', fontBody: 'Manrope',
-    colors: { bg: '#080b12', bg2: '#0d1220', panel: '#121a2b', panel2: '#192338', line: '#22304a', line2: '#2f4263', fg: '#e6eeff', muted: '#8fa0c0', dim: '#5e6d8a', accent: '#36c6ff', accent2: '#7fdcff' } },
-  anime: { name: 'Аниме sci-fi (тёмный, красный акцент)', fontDisplay: 'Unbounded', fontBody: 'Manrope',
-    colors: { bg: '#0b0c12', bg2: '#11131c', panel: '#171a26', panel2: '#1f2332', line: '#2a2f42', line2: '#3a4057', fg: '#eef0f8', muted: '#99a0b8', dim: '#666d86', accent: '#e8344f', accent2: '#ff6a80' } },
-  noir: { name: 'Нуар / хоррор', fontDisplay: 'Russo One', fontBody: 'PT Serif',
-    colors: { bg: '#0a0a0a', bg2: '#111111', panel: '#171717', panel2: '#1f1f1f', line: '#2b2b2b', line2: '#3a3a3a', fg: '#e8e3da', muted: '#a09a90', dim: '#6b665f', accent: '#b3261e', accent2: '#e0453b' } },
-  pastel: { name: 'Светлый пастельный', fontDisplay: 'Comfortaa', fontBody: 'Nunito',
-    colors: { bg: '#2a2433', bg2: '#312a3c', panel: '#3a3247', panel2: '#443a53', line: '#54496a', line2: '#67597f', fg: '#fbf6ff', muted: '#cbbfe0', dim: '#9a8db3', accent: '#ff9ec7', accent2: '#ffc2dc' } },
+  studio: { name: 'Studio (стандарт)', fontDisplay: 'Space Grotesk', fontBody: 'Inter', style: { radius: 12, upper: false, track: 0, glow: false, bg: 'dots', cut: false },
+    colors: { bg: '#0f1115', bg2: '#151820', panel: '#1b1f29', panel2: '#222734', line: '#2c3241', line2: '#3a4155', fg: '#e9ecf2', muted: '#9098aa', dim: '#646c7e', accent: '#e2384d', accent2: '#ff6b7d', accent3: '#5a9cf0' } },
+  neon: { name: 'Неон-космос (аниме sci-fi)', fontDisplay: 'Tektur', fontBody: 'Manrope', style: { radius: 4, upper: true, track: 0.08, glow: true, bg: 'stars', cut: true },
+    colors: { bg: '#07060d', bg2: '#0c0a17', panel: '#121022', panel2: '#1a1630', line: '#2a2346', line2: '#3d3266', fg: '#f3efff', muted: '#a79fcb', dim: '#6f6794', accent: '#ff2e58', accent2: '#ff7d98', accent3: '#3fd6ff' } },
+  space: { name: 'Холодный космос', fontDisplay: 'Exo 2', fontBody: 'Manrope', style: { radius: 10, upper: true, track: 0.05, glow: true, bg: 'grid', cut: false },
+    colors: { bg: '#060a12', bg2: '#0a1120', panel: '#0f1a2e', panel2: '#15233d', line: '#1f3354', line2: '#2d4775', fg: '#e6f0ff', muted: '#8ea6cc', dim: '#5b7096', accent: '#2fc4ff', accent2: '#86e1ff', accent3: '#ffb547' } },
+  fairy: { name: 'Сказка (пергамент, золото)', fontDisplay: 'Cormorant Garamond', fontBody: 'EB Garamond', texture: true, style: { radius: 6, upper: false, track: 0.01, glow: false, bg: 'paper', cut: false },
+    colors: { bg: '#15110d', bg2: '#1c1611', panel: '#221b15', panel2: '#2c231b', line: '#3a2f24', line2: '#4d3e2f', fg: '#efe6d6', muted: '#b5a68e', dim: '#7d705e', accent: '#c9a45c', accent2: '#e4c47e', accent3: '#a3432f' } },
+  noir: { name: 'Нуар / хоррор', fontDisplay: 'Russo One', fontBody: 'PT Serif', style: { radius: 2, upper: true, track: 0.12, glow: false, bg: 'scan', cut: false },
+    colors: { bg: '#0a0a0a', bg2: '#111111', panel: '#171717', panel2: '#1f1f1f', line: '#2b2b2b', line2: '#3a3a3a', fg: '#e8e3da', muted: '#a09a90', dim: '#6b665f', accent: '#b3261e', accent2: '#e0453b', accent3: '#c9b37e' } },
+  pastel: { name: 'Мягкий пастельный', fontDisplay: 'Comfortaa', fontBody: 'Nunito', style: { radius: 20, upper: false, track: 0, glow: false, bg: 'none', cut: false },
+    colors: { bg: '#2a2433', bg2: '#312a3c', panel: '#3a3247', panel2: '#443a53', line: '#54496a', line2: '#67597f', fg: '#fbf6ff', muted: '#cbbfe0', dim: '#9a8db3', accent: '#ff9ec7', accent2: '#ffc2dc', accent3: '#9fe3d0' } },
 }
 const DEFAULT = PRESETS.studio
-const VAR = { bg: '--bg', bg2: '--bg2', panel: '--panel', panel2: '--panel2', line: '--line', line2: '--line2', fg: '--fg', muted: '--muted', dim: '--dim', accent: '--accent', accent2: '--accent2' }
+const VAR = { bg: '--bg', bg2: '--bg2', panel: '--panel', panel2: '--panel2', line: '--line', line2: '--line2', fg: '--fg', muted: '--muted', dim: '--dim', accent: '--accent', accent2: '--accent2', accent3: '--accent3' }
 
 export function applyTheme(t) {
   const th = t && Object.keys(t.colors || {}).length ? t : DEFAULT
@@ -29,6 +29,12 @@ export function applyTheme(t) {
   root.setProperty('--display', `"${disp}", system-ui, sans-serif`)
   root.setProperty('--body', `"${body}", system-ui, sans-serif`)
   document.body.classList.toggle('textured', !!th.texture)
+  const st = { ...DEFAULT.style, ...(th.style || {}) }
+  root.setProperty('--r', st.radius + 'px'); root.setProperty('--r-sm', Math.max(2, Math.round(st.radius * 0.7)) + 'px')
+  root.setProperty('--track', st.track + 'em')
+  const B = document.body.classList
+  B.toggle('hd-upper', !!st.upper); B.toggle('glow', !!st.glow); B.toggle('cut', !!st.cut)
+  for (const k of ['dots', 'stars', 'grid', 'paper', 'scan', 'none']) B.toggle('bg-' + k, st.bg === k)
   const fams = [...new Set([disp, body])].filter(f => !['Inter', 'Space Grotesk'].includes(f))
   let link = document.getElementById('proj-fonts')
   if (fams.length) {
@@ -67,7 +73,7 @@ export function themePage(main, p, { api, h, toast, fileUrl, onSaved }) {
       h('label', {}, 'Заголовки', fontSel('fontDisplay')), h('label', {}, 'Текст', fontSel('fontBody'))),
       h('div', { class: 'theme-sample' }, h('div', { style: { fontFamily: 'var(--display)', fontSize: '30px', fontWeight: 700 } }, p.name || p.dir), h('div', { style: { fontFamily: 'var(--body)' } }, 'Съешь же ещё этих мягких французских булок, да выпей чаю. 0123456789')))
     // colours
-    const LABEL = { bg: 'Фон', bg2: 'Фон 2', panel: 'Панели', panel2: 'Панели 2', line: 'Линии', line2: 'Линии 2', fg: 'Текст', muted: 'Тусклый текст', dim: 'Подписи', accent: 'Акцент', accent2: 'Акцент светлый' }
+    const LABEL = { bg: 'Фон', bg2: 'Фон 2', panel: 'Панели', panel2: 'Панели 2', line: 'Линии', line2: 'Линии 2', fg: 'Текст', muted: 'Тусклый текст', dim: 'Подписи', accent: 'Акцент', accent2: 'Акцент светлый', accent3: 'Второй акцент' }
     page.append(h('h2', {}, 'Цвета'), h('div', { class: 'theme-colors' }, ...Object.keys(LABEL).map(k => {
       const inp = h('input', { type: 'color', value: t.colors[k] || DEFAULT.colors[k] })
       inp.addEventListener('input', () => { t.colors[k] = inp.value; t.preset = 'custom'; saveSoon() })
@@ -75,6 +81,14 @@ export function themePage(main, p, { api, h, toast, fileUrl, onSaved }) {
     })))
     const tex = h('input', { type: 'checkbox', checked: !!t.texture }); tex.addEventListener('change', () => { t.texture = tex.checked; saveSoon() })
     page.append(h('label', { class: 'theme-check' }, tex, ' Фактура фона (виньетка, зерно)'))
+    t.style = { ...DEFAULT.style, ...(t.style || {}) }
+    const chk = (key, label) => { const c = h('input', { type: 'checkbox', checked: !!t.style[key] }); c.addEventListener('change', () => { t.style[key] = c.checked; t.preset = 'custom'; saveSoon() }); return h('label', { class: 'theme-check' }, c, ' ' + label) }
+    const rng = (key, label, min, max, step) => { const r = h('input', { type: 'range', min, max, step, value: t.style[key] }); const out = h('b', {}, String(t.style[key])); r.addEventListener('input', () => { t.style[key] = Number(r.value); out.textContent = r.value; t.preset = 'custom'; saveSoon() }); return h('label', { class: 'theme-range' }, label, r, out) }
+    const bgSel = h('select', {}, ...[['none', 'Без узора'], ['dots', 'Точки'], ['stars', 'Звёзды'], ['grid', 'Сетка'], ['scan', 'Скан-линии'], ['paper', 'Бумага']].map(([v, l]) => h('option', { value: v, selected: t.style.bg === v }, l)))
+    bgSel.addEventListener('change', () => { t.style.bg = bgSel.value; t.preset = 'custom'; saveSoon() })
+    page.append(h('h2', {}, 'Стилистика'), h('div', { class: 'theme-row' },
+      h('div', { class: 'theme-col' }, chk('upper', 'Заголовки ЗАГЛАВНЫМИ'), rng('track', 'Разрядка заголовков', 0, 0.2, 0.01), chk('glow', 'Свечение акцента'), chk('cut', 'Срезанные углы у карточек')),
+      h('div', { class: 'theme-col' }, rng('radius', 'Скругление, px', 0, 24, 1), h('label', {}, 'Узор фона', bgSel))))
     // logo and cover
     const imgSlot = (key, title, hint) => {
       const slot = h('div', { class: 'theme-img' + (t[key] ? '' : ' empty'), style: t[key] ? { backgroundImage: `url("${fileUrl(t[key])}")` } : {} },
