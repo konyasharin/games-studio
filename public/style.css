@@ -397,3 +397,9 @@ textarea.prompt.desc { min-height: 110px; }
 .tp-ghost:hover { border-color: #3a3a40; }
 .tp-why { font-size: 12px; color: #b4b4bc; border-left: 2px solid var(--tp-lime); padding-left: 9px; }
 .tp-btn, .tp-ghost { white-space: nowrap; font-size: 12px; }
+/* Tripo panel on the right side of the card */
+.tripo-tab { left: auto; right: -30px; border-right: 1px solid var(--tp-line); border-left: 0; border-radius: 0 10px 10px 0; box-shadow: 4px 4px 14px rgba(0,0,0,.4); }
+.tripo-tab:hover { left: auto; right: -34px; }
+.tripo-tab-t { transform: none; }
+.tripo-panel { right: auto; left: calc(100% + 36px); }
+@keyframes tpIn { from { opacity: 0; transform: translateX(-14px); } }
