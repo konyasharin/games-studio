@@ -39,6 +39,11 @@ no background wording: that is added per image. Nothing invented beyond the refe
 No image generation in this kind.
 
 ## kind = "images"
+Batch: when JOB has `jobs` (a list), this run does ALL of those image jobs (each with its own `id`, `token`,
+`card`, `prompt`, `count`, `sides`, `inputs`; the first one is this job). Build every job's side prompts, open one
+Flow tab, submit ALL generations of ALL jobs back to back, then collect. Post each image to ITS job
+(`/api/jobs/<its id>/image` with ITS token, via the receiver page), log progress per job, and call `/complete`
+for every job separately (a job you could not finish gets status "error" with the reason).
 Generate `count` images for EACH side in `sides` (`front`, `back`, `left`, `right`): every image shows ONE side
 of the object, nothing else on it. `inputs` are local paths of reference images (the chosen pictures of the parent
 cards and, for the non-front sides, this card's own chosen front view): attach them all to the Flow prompt.

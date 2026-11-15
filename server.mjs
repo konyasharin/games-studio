@@ -241,6 +241,10 @@ function follow(job, { sid, started, pid, offset, owned }) {
         if (j.kind === 'chat') { j.answer = String(result?.result || '').slice(0, 20000); j.cost = result?.total_cost_usd }
         if (j.status === 'running') { j.status = status; j.log.push(now() + ' ' + line); if (j.kind === 'request') j.thread = [...(j.thread || []), { who: 'claude', text: status === 'done' ? 'Готово (без отчёта).' : 'Не получилось: ' + line, at: now() }] }
       })
+      for (const mid of job.batch || []) {
+        const m = jobs.get(mid)
+        if (m?.status === 'running') await mutateJob(mid, j => { j.status = (j.images || []).length ? status : 'error'; j.log.push(now() + ' ' + ((j.images || []).length ? line : 'Claude закончил, картинок для этой задачи нет')) })
+      }
     } catch {}
     running = null; child_ = null
     setTimeout(workerTick, 500)
@@ -283,10 +287,23 @@ async function runJob(job, s) {
     if (job.kind === 'request' && job.board && !board) throw new Error('доска удалена')
     const template = await fsp.readFile(path.join(APP, 'worker-prompt.md'), 'utf8')
     job.token = crypto.randomBytes(16).toString('hex')
+    // image jobs of the same project go together: one Claude submits all their generations at once in Flow
+    let batch = []
+    if (job.kind === 'images') {
+      batch = sortedJobs().filter(j => j.id !== job.id && j.kind === 'images' && j.status === 'queued' && j.project === job.project).slice(0, 7)
+      for (const m of batch) {
+        m.token = crypto.randomBytes(16).toString('hex'); m.leader = job.id
+        await mutateJob(m.id, j => { j.status = 'running'; j.started = now(); j.log.push(now() + ' выполняется вместе с задачей «' + job.cardTitle + '»') })
+      }
+    }
+    const cardOf = async m => { const b = m.board === job.board ? board : await readJSON(boardFile(p, m.board), null); return b?.cards.find(c => c.id === m.card) || null }
+    const batchCtx = batch.length ? await Promise.all([job, ...batch].map(async m => ({ id: m.id, token: m.token, card: await cardOf(m),
+      prompt: m.prompt, count: m.count, sides: m.sides, inputs: (m.inputs || []).map(f => path.join(ROOT, f)).filter(f => inside(ROOT, f)) }))) : null
+    job.batch = batch.map(m => m.id)
     const ctx = {
       api: `http://127.0.0.1:${PORT}`, token: job.token, job: publicJob(job), card, flowUrl: s.flowUrl, imageModel: s.imageModel,
       projectId: p.id, projectRoot: path.join(ROOT, p.dir), boardContext: board?.context || '',
-      where: job.where || null, thread: job.thread || null,
+      where: job.where || null, thread: job.thread || null, jobs: batchCtx,
       inputs: (job.inputs || []).map(f => path.join(ROOT, f)).filter(f => inside(ROOT, f)),
     }
     const prompt = job.kind === 'chat'
@@ -312,11 +329,13 @@ async function runJob(job, s) {
   } catch (e) {
     running = null; child_ = null
     await mutateJob(job.id, j => { j.status = 'error'; j.log.push(now() + ' ' + e.message) }).catch(() => {})
+    for (const m of sortedJobs().filter(m => m.leader === job.id && m.status === 'running')) await mutateJob(m.id, j => { j.status = 'queued'; j.log.push(now() + ' вернулась в очередь') }).catch(() => {})
   }
 }
 
 // at startup: a job still "running" whose Claude is alive is picked up again; a dead one goes back to the queue once
 for (const j of sortedJobs().filter(j => j.status === 'running')) {
+  if (j.leader) continue
   if (alive(j.pid) && j.offset != null && !running) {
     j.log.push(now() + ' сервер перезапущен, продолжаю следить за задачей')
     follow(j, { sid: j.sid, started: j.sessStarted, pid: j.pid, offset: j.offset, owned: false })
@@ -328,6 +347,9 @@ for (const j of sortedJobs().filter(j => j.status === 'running')) {
   j.retries = (j.retries || 0) + 1
   j.log.push(now() + ' прервано перезапуском сервера')
   saveJob(j).catch(() => {})
+}
+for (const j of sortedJobs().filter(j => j.status === 'running' && j.leader && jobs.get(j.leader)?.status !== 'running')) {
+  j.status = 'queued'; j.log.push(now() + ' прервано перезапуском сервера'); saveJob(j).catch(() => {})
 }
 setInterval(workerTick, 4000)
 
