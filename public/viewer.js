@@ -2,15 +2,15 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 
-export async function showModel({ url, name, openModal, closeModal, toast, onThumb }) {
+export async function showModel({ url, name, openModal, closeModal, toast, onThumb, hasThumb }) {
   const box = document.createElement('div'); box.className = 'viewer'
   const msg = document.createElement('div'); msg.className = 'msg'; msg.textContent = 'Загружаю модель…'
   const bar = document.createElement('div'); bar.className = 'bar'
   bar.innerHTML = `<span class="name"></span>`; bar.firstChild.textContent = name
   const btn = (t, f) => { const b = document.createElement('button'); b.className = 'btn sm'; b.textContent = t; b.onclick = f; bar.append(b); return b }
-  let renderer, raf, mixer, disposed = false
+  let renderer, raf, mixer, ro, disposed = false
   const cleanup = () => {
-    disposed = true; cancelAnimationFrame(raf)
+    disposed = true; cancelAnimationFrame(raf); ro?.disconnect()
     try { renderer?.dispose(); renderer?.forceContextLoss() } catch {}
   }
   openModal(box, cleanup)
@@ -28,7 +28,7 @@ export async function showModel({ url, name, openModal, closeModal, toast, onThu
   const cam = new THREE.PerspectiveCamera(35, 1, 0.01, 200)
   const ctl = new OrbitControls(cam, renderer.domElement); ctl.enableDamping = true
   const resize = () => { const w = box.clientWidth, h = box.clientHeight; renderer.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix() }
-  resize(); new ResizeObserver(() => !disposed && resize()).observe(box)
+  resize(); ro = new ResizeObserver(() => !disposed && resize()); ro.observe(box)
   const clock = new THREE.Clock()
   const loop = () => { if (disposed) return; raf = requestAnimationFrame(loop); mixer?.update(clock.getDelta()); ctl.update(); renderer.render(scene, cam) }
   loop()
@@ -61,5 +61,5 @@ export async function showModel({ url, name, openModal, closeModal, toast, onThu
   btn('Сделать превью карточки', () => renderer.domElement.toBlob(bl => { if (bl) { onThumb?.(bl); toast('Превью сохранено') } }, 'image/png'))
   btn('Закрыть', closeModal)
   // first look becomes the card picture automatically
-  setTimeout(() => !disposed && renderer.domElement.toBlob(bl => bl && onThumb?.(bl), 'image/png'), 900)
+  if (!hasThumb) setTimeout(() => !disposed && renderer.domElement.toBlob(bl => bl && onThumb?.(bl), 'image/png'), 900)
 }

@@ -45,7 +45,7 @@ window.addEventListener('unhandledrejection', e => { console.error(e.reason); e.
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms) } }
 
 // ---------- modal ----------
-function closeModal() { const m = $('#modal'); m.hidden = true; m.innerHTML = ''; modalCleanup?.(); modalCleanup = null }
+function closeModal({ silent = false } = {}) { const m = $('#modal'); const cb = modalCleanup; modalCleanup = null; m.hidden = true; m.innerHTML = ''; if (!silent) cb?.() }
 let modalCleanup = null
 function openModal(content, cleanup) {
   const m = $('#modal'); m.innerHTML = ''; m.append(content); m.hidden = false; modalCleanup = cleanup
@@ -55,10 +55,10 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal
 function prompt2(title, fields) {
   return new Promise(resolve => {
     const inputs = {}
-    const form = h('form', { class: 'modal-box', onsubmit: e => { e.preventDefault(); const v = {}; for (const k in inputs) v[k] = inputs[k].value.trim(); closeModal(); resolve(v) } },
+    const form = h('form', { class: 'modal-box', onsubmit: e => { e.preventDefault(); const v = {}; for (const k in inputs) v[k] = inputs[k].value.trim(); closeModal({ silent: true }); resolve(v) } },
       h('h2', {}, title),
       ...fields.map(f => h('label', {}, f.label, inputs[f.key] = f.options ? h('select', {}, ...f.options.map(o => h('option', { value: o[0] }, o[1]))) : h('input', { value: f.value || '', placeholder: f.placeholder || '' }))),
-      h('div', { class: 'row' }, h('span', { class: 'grow' }), h('button', { type: 'button', class: 'btn ghost', onclick: () => { closeModal(); resolve(null) } }, 'Отмена'), h('button', { class: 'btn primary' }, 'Готово')))
+      h('div', { class: 'row' }, h('span', { class: 'grow' }), h('button', { type: 'button', class: 'btn ghost', onclick: () => { closeModal({ silent: true }); resolve(null) } }, 'Отмена'), h('button', { class: 'btn primary' }, 'Готово')))
     openModal(form, () => resolve(null))
     setTimeout(() => form.querySelector('input,select')?.focus(), 30)
   })
@@ -66,33 +66,40 @@ function prompt2(title, fields) {
 function confirm2(text, yes = 'Удалить') {
   return new Promise(resolve => {
     openModal(h('div', { class: 'modal-box' }, h('h2', {}, text),
-      h('div', { class: 'row' }, h('span', { class: 'grow' }), h('button', { class: 'btn ghost', onclick: () => { closeModal(); resolve(false) } }, 'Отмена'),
-        h('button', { class: 'btn primary', onclick: () => { closeModal(); resolve(true) } }, yes))), () => resolve(false))
+      h('div', { class: 'row' }, h('span', { class: 'grow' }), h('button', { class: 'btn ghost', onclick: () => { closeModal({ silent: true }); resolve(false) } }, 'Отмена'),
+        h('button', { class: 'btn primary', onclick: () => { closeModal({ silent: true }); resolve(true) } }, yes))), () => resolve(false))
   })
 }
 
 // ---------- router ----------
 let current = null // { stop() }
+let navSeq = 0
+const stale = tok => tok !== navSeq
 function crumbs(items) {
   const c = $('#crumbs'); c.innerHTML = ''
   items.forEach((it, i) => { if (i) c.append(h('span', { class: 'sep' }, '/')); c.append(it.href ? h('a', { href: it.href }, it.text) : h('span', { class: 'cur' }, it.text)) })
 }
 async function route() {
   current?.stop?.(); current = null
-  const view = $('#view'); view.innerHTML = ''
+  if (!$('#modal').hidden) closeModal()
+  const tok = ++navSeq
+  const old = $('#view'); const view = old.cloneNode(false); old.replaceWith(view)
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
   try {
-    if (parts[0] === 'p' && parts[2] === 'b') current = await boardPage(view, parts[1], parts[3])
-    else if (parts[0] === 'p') current = await projectPage(view, parts[1], parts[2] || '3d')
-    else current = await homePage(view)
-  } catch (e) { console.error(e); view.append(h('div', { class: 'page' }, h('div', { class: 'empty-note' }, 'Не удалось открыть: ' + e.message, h('br'), h('a', { href: '#/' , class: 'btn', style: { marginTop: '14px' } }, 'На главную')))) }
+    const page = parts[0] === 'p' && parts[2] === 'b' ? await boardPage(view, parts[1], parts[3], tok)
+      : parts[0] === 'p' ? await projectPage(view, parts[1], parts[2] || '3d', tok) : await homePage(view, tok)
+    if (stale(tok)) { page?.stop?.(); return }
+    current = page
+  } catch (e) {
+    if (stale(tok)) return console.error(e); view.append(h('div', { class: 'page' }, h('div', { class: 'empty-note' }, 'Не удалось открыть: ' + e.message, h('br'), h('a', { href: '#/' , class: 'btn', style: { marginTop: '14px' } }, 'На главную')))) }
 }
 window.addEventListener('hashchange', route)
 
 // ---------- home ----------
-async function homePage(view) {
-  crumbs([{ text: 'Проекты' }])
+async function homePage(view, tok) {
   const list = await api('GET', '/api/projects')
+  if (stale(tok)) return
+  crumbs([{ text: 'Проекты' }])
   const page = h('div', { class: 'page' }, h('h1', {}, 'Проекты'), h('p', { class: 'sub' }, 'Игры и всё, что к ним относится: сюжет, 3D, звук. Данные лежат в папке проекта и переживают перезапуск.'))
   const grid = h('div', { class: 'grid' })
   for (const p of list) {
@@ -108,8 +115,9 @@ async function homePage(view) {
 }
 
 // ---------- project ----------
-async function projectPage(view, pid, sid) {
+async function projectPage(view, pid, sid, tok) {
   const p = await api('GET', `/api/projects/${pid}`)
+  if (stale(tok)) return
   const sec = p.sections.find(s => s.id === sid) || p.sections[0]
   crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir }])
   const side = h('aside', { class: 'side' }, h('h3', {}, 'Разделы'),
@@ -123,7 +131,7 @@ async function projectPage(view, pid, sid) {
   const main = h('div', { class: 'proj-main' })
   view.append(h('div', { class: 'proj' }, side, main))
   if (sec.kind === 'boards') return boardsList(main, p, sec)
-  return notesPage(main, p, sec)
+  return notesPage(main, p, sec, tok)
 }
 
 async function boardsList(main, p, sec) {
@@ -149,8 +157,9 @@ async function boardsList(main, p, sec) {
   return {}
 }
 
-async function notesPage(main, p, sec) {
+async function notesPage(main, p, sec, tok) {
   const { html } = await api('GET', `/api/projects/${p.id}/notes/${sec.id}`)
+  if (stale(tok)) return
   const saved = h('span', { class: 'saved' }, 'Сохранено')
   const ed = h('div', { class: 'editor', contenteditable: 'true', html: html || `<h1>${esc(sec.title)}</h1><p>Пиши здесь. Сохраняется само.</p>` })
   const save = debounce(async () => { try { await api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }); saved.textContent = 'Сохранено' } catch { saved.textContent = 'Не сохранено, повторю' ; save() } }, 700)
@@ -162,7 +171,7 @@ async function notesPage(main, p, sec) {
     h('button', { class: 'btn sm', onclick: cmd('insertUnorderedList') }, '• Список'), saved)
   main.append(h('div', { class: 'page' }, bar, ed))
   window.addEventListener('beforeunload', save)
-  return { stop: () => { window.removeEventListener('beforeunload', save) } }
+  return { stop: () => { window.removeEventListener('beforeunload', save); if (saved.textContent !== 'Сохранено') api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }).catch(() => {}) } }
 }
 
 // ---------- board ----------
@@ -170,13 +179,17 @@ const TYPES = {
   ref: 'Референс', part: 'Часть', split: 'Разбивка', model: 'Модель', final: 'Итог', note: 'Заметка',
 }
 
-async function boardPage(view, pid, bid) {
+async function boardPage(view, pid, bid, tok) {
   const p = await api('GET', `/api/projects/${pid}`)
   let B = await api('GET', `/api/projects/${pid}/boards/${bid}`)
+  if (stale(tok)) return
   const sec = p.sections.find(s => s.id === (p.boards.find(b => b.id === bid)?.section || '3d'))
   crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir, href: `#/p/${pid}/${sec?.id || '3d'}` }, { text: B.name }])
   const base = `/api/projects/${pid}/boards/${bid}`
   const el = h('div', { class: 'board' }); view.append(el)
+  // a file dropped between cards must not make the browser leave the app
+  el.addEventListener('dragover', e => e.preventDefault())
+  el.addEventListener('drop', e => { e.preventDefault(); if (!e.target.closest('.card')) toast('Перетащи файл на карточку') })
   const world = h('div', { class: 'world' }); el.append(world)
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.classList.add('links'); world.append(svg)
   let cam = B.view || { x: 40, y: 60, z: 0.85 }
@@ -247,7 +260,7 @@ async function boardPage(view, pid, bid) {
       seen.add(c.id)
       let n = nodes.get(c.id)
       const s = sig(c)
-      if (n && (n._sig === s || editing.has(c.id))) { if (!(dragging?.id === c.id)) { n.style.left = c.x + 'px'; n.style.top = c.y + 'px' } continue }
+      if (n && (n._sig === s || editing.has(c.id) || dragging?.id === c.id)) { if (!(dragging?.id === c.id)) { n.style.left = c.x + 'px'; n.style.top = c.y + 'px' } continue }
       const fresh = cardNode(c)
       fresh._sig = s
       if (n) n.replaceWith(fresh); else world.append(fresh)
@@ -279,7 +292,12 @@ async function boardPage(view, pid, bid) {
   const toWorld = e => { const r = el.getBoundingClientRect(); return [(e.clientX - r.left - cam.x) / cam.z, (e.clientY - r.top - cam.y) / cam.z] }
 
   const patch = (c, body) => api('PATCH', `${base}/cards/${c.id}`, body).then(() => refresh()).catch(() => {})
-  const generate = async (c, body = {}) => { try { await api('POST', `${base}/cards/${c.id}/generate`, body); toast('Задача поставлена в очередь'); refresh() } catch {} }
+  const inflight = new Set()
+  const generate = async (c, body = {}) => {
+    if (inflight.has(c.id)) return
+    inflight.add(c.id)
+    try { await api('POST', `${base}/cards/${c.id}/generate`, body); toast('Задача поставлена в очередь') } catch {} finally { inflight.delete(c.id); refresh() }
+  }
   async function upload(c, file, slot) {
     toast(`Загружаю ${file.name}…`)
     try { await api('POST', `${base}/cards/${c.id}/files?slot=${slot}&name=${encodeURIComponent(file.name)}`, file, { raw: true }); refresh() } catch {}
@@ -311,11 +329,12 @@ async function boardPage(view, pid, bid) {
       if (d.moved) { c.x = d.nx; c.y = d.ny; api('PATCH', `${base}/cards/${c.id}`, { x: d.nx, y: d.ny }, { quiet: true }).catch(() => toast('Позиция не сохранилась', true)) }
       else if (!title.contains(document.activeElement)) title.focus()
     }
-    head.addEventListener('pointerup', endDrag); head.addEventListener('pointercancel', endDrag)
+    head.addEventListener('pointerup', endDrag); head.addEventListener('pointercancel', endDrag); head.addEventListener('lostpointercapture', endDrag)
 
     const port = h('div', { class: 'port', title: 'Протяни к другой карточке, чтобы связать' })
     port.addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); port.setPointerCapture(e.pointerId); const [x, y] = toWorld(e); linking = { from: c.id, x, y }; drawLinks() })
     port.addEventListener('pointermove', e => { if (!linking) return; const [x, y] = toWorld(e); linking.x = x; linking.y = y; drawLinks() })
+    port.addEventListener('lostpointercapture', () => setTimeout(() => { if (linking?.from === c.id) { linking = null; drawLinks() } }, 0))
     port.addEventListener('pointerup', async e => {
       if (!linking) return
       const target = document.elementsFromPoint(e.clientX, e.clientY).map(x => x.closest?.('.card')).find(x => x && x.dataset.id !== c.id)
@@ -335,8 +354,9 @@ async function boardPage(view, pid, bid) {
       const slot = slotEl?.dataset.slot || (['ref', 'part'].includes(c.type) ? 'variants' : c.type === 'model' ? 'mesh' : 'files')
       for (const f of e.dataTransfer.files) upload(c, f, slot)
     })
-    n.addEventListener('focusin', e => { if (e.target.matches('textarea, input')) editing.add(c.id) })
-    n.addEventListener('focusout', e => { if (e.target.matches('textarea, input')) setTimeout(() => { if (!n.contains(document.activeElement)) { editing.delete(c.id); render() } }, 50) })
+    const typing = x => !!x?.matches?.('textarea, input, [contenteditable="true"]')
+    n.addEventListener('focusin', e => { if (typing(e.target)) editing.add(c.id) })
+    n.addEventListener('focusout', () => setTimeout(() => { if (!(typing(document.activeElement) && n.contains(document.activeElement)) && editing.delete(c.id)) render() }, 30))
     return n
   }
 
@@ -349,7 +369,7 @@ async function boardPage(view, pid, bid) {
       ['queued', 'running'].includes(j.status) ? h('button', { class: 'btn sm ghost', onclick: () => api('POST', `/api/jobs/${j.id}/cancel`).then(refresh) }, 'Отменить') : null,
       j.status === 'error' ? h('button', { class: 'btn sm ghost', onclick: () => api('POST', `/api/jobs/${j.id}/retry`).then(refresh) }, 'Повторить') : null)
   }
-  const busy = c => ['queued', 'running'].includes(jobOf(c.id)?.status)
+  const busy = c => inflight.has(c.id) || ['queued', 'running'].includes(jobOf(c.id)?.status)
 
   function lightbox(c, v) {
     openModal(h('div', { class: 'lightbox' }, h('img', { src: fileUrl(v.file) }),
@@ -368,7 +388,7 @@ async function boardPage(view, pid, bid) {
       const showAll = c._all
       const list = showAll ? vars : vars.slice(-8)
       b.append(h('div', { class: 'strip' }, ...list.slice().reverse().map(v => h('div', { class: 'thumb-v' + (v.file === c.chosen ? ' ch' : ''), title: v.prompt || '', style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v) },
-        h('button', { class: 'x', title: 'Скрыть вариант', onclick: e => { e.stopPropagation(); patch(c, { variants: (c.variants || []).map(x => x.file === v.file ? { ...x, hidden: true } : x), ...(c.chosen === v.file ? { chosen: null } : {}) }) } }, '✕')))))
+        h('button', { class: 'x', title: 'Скрыть вариант', onclick: e => { e.stopPropagation(); api('POST', `${base}/cards/${c.id}/variant`, { file: v.file, hidden: true }).then(refresh).catch(() => {}) } }, '✕')))))
       if (vars.length > 8) b.append(h('span', { class: 'more' }, `ещё ${vars.length - 8} вариантов в истории`))
     }
     const ta = h('textarea', { class: 'prompt', placeholder: 'Промпт (по-русски). Пусто — Claude напишет сам по названию и связанным карточкам.' }); ta.value = c.prompt || ''
@@ -385,21 +405,11 @@ async function boardPage(view, pid, bid) {
     const st = statusLine(c); if (st) b.append(st)
   }
 
+  let confirming = false
   async function confirmSplit(c) {
-    const parts = (c.parts || []).filter(x => !x.card && x.name?.trim())
-    if (!parts.length) return toast('Нет новых частей для создания')
-    const fin = B.cards.find(x => x.type === 'final')
-    let y = c.y - (parts.length - 1) * 340
-    const updated = [...(c.parts || [])]
-    for (const part of parts) {
-      const pc = await api('POST', base + '/cards', { type: 'part', title: part.name, x: c.x + 480, y, w: 380, prompt: part.prompt || '', count: 4, views: 4, variants: [], note: part.includes, route: part.route, linkFrom: c.id })
-      const mc = await api('POST', base + '/cards', { type: 'model', title: part.name + ': модель', x: c.x + 940, y, w: 340, mesh: [], textured: [], route: part.route, linkFrom: pc.id })
-      if (fin) await api('POST', base + '/links', { from: mc.id, to: fin.id })
-      const i = updated.indexOf(part); updated[i] = { ...part, card: pc.id }
-      y += 700
-    }
-    await api('PATCH', `${base}/cards/${c.id}`, { parts: updated, confirmed: true })
-    toast(`Создано частей: ${parts.length}`); refresh()
+    if (confirming) return
+    confirming = true
+    try { const r = await api('POST', `${base}/cards/${c.id}/confirm-split`); toast(`Создано частей: ${r.created}`) } catch {} finally { confirming = false; refresh() }
   }
 
   const BODY = {
@@ -419,18 +429,21 @@ async function boardPage(view, pid, bid) {
       if (c.proposal) b.append(h('div', { class: 'proposal' }, c.proposal))
       const parts = c.parts || []
       const box = h('div', { class: 'parts' })
-      const save = debounce(() => patch(c, { parts }), 500)
-      parts.forEach((part, i) => {
-        const name = h('input', { class: 'name', value: part.name || '', placeholder: 'Название части' }); name.addEventListener('input', () => { part.name = name.value; save() })
-        const inc = h('input', { class: 'small', value: part.includes || '', placeholder: 'Что входит' }); inc.addEventListener('input', () => { part.includes = inc.value; save() })
-        const rt = h('input', { class: 'small', value: part.route || '', placeholder: 'Tripo: модель и полигоны' }); rt.addEventListener('input', () => { part.route = rt.value; save() })
-        const pr = h('textarea', { placeholder: 'Промпт референса части' }); pr.value = part.prompt || ''; pr.addEventListener('input', () => { part.prompt = pr.value; save() })
-        box.append(h('div', { class: 'part' + (part.card ? ' done' : '') }, h('div', { class: 'row' }, name, part.card ? h('span', { class: 'tag done' }, 'создана') : h('button', { class: 'icon-btn', title: 'Убрать часть', onclick: () => { parts.splice(i, 1); patch(c, { parts }) } }, '✕')), inc, rt, pr))
+      const partOp = body => api('POST', `${base}/cards/${c.id}/parts`, body).then(refresh).catch(() => {})
+      parts.forEach(part => {
+        const pending = {}
+        const push = debounce(() => { const fields = { ...pending }; for (const k in pending) delete pending[k]; partOp(part.pid ? { op: 'update', pid: part.pid, fields } : { op: 'noop' }) }, 500)
+        const field = (tag, key, attrs) => { const x = h(tag, attrs); x.value = part[key] || ''; x.addEventListener('input', () => { pending[key] = x.value; push() }); return x }
+        box.append(h('div', { class: 'part' + (part.card ? ' done' : '') },
+          h('div', { class: 'row' }, field('input', 'name', { class: 'name', placeholder: 'Название части' }),
+            part.card ? h('span', { class: 'tag done' }, 'создана') : h('button', { class: 'icon-btn', title: 'Убрать часть', onclick: () => part.pid && partOp({ op: 'remove', pid: part.pid }) }, '✕')),
+          field('input', 'includes', { class: 'small', placeholder: 'Что входит' }), field('input', 'route', { class: 'small', placeholder: 'Tripo: модель и полигоны' }),
+          field('textarea', 'prompt', { placeholder: 'Промпт референса части' })))
       })
       if (!parts.length && !busy(c)) box.append(h('div', { class: 'proposal' }, 'Частей пока нет. Попроси Claude предложить или добавь вручную.'))
       b.append(box)
       b.append(h('div', { class: 'row' },
-        h('button', { class: 'btn sm', onclick: () => { parts.push({ name: '', includes: '', route: '', prompt: '' }); patch(c, { parts }) } }, '+ часть'),
+        h('button', { class: 'btn sm', onclick: () => partOp({ op: 'add' }) }, '+ часть'),
         h('button', { class: 'btn sm', disabled: busy(c), onclick: () => generate(c, { kind: 'split' }) }, parts.length ? 'Предложить заново' : 'Предложить'),
         h('span', { class: 'grow' }),
         h('button', { class: 'btn primary sm', disabled: !parts.some(x => !x.card && x.name), onclick: () => confirmSplit(c) }, 'Подтвердить →')))
@@ -474,7 +487,8 @@ async function boardPage(view, pid, bid) {
   async function openViewer(c, f) {
     const { showModel } = await import('/viewer.js')
     showModel({ url: fileUrl(f.file), name: f.name || f.file, openModal, closeModal, toast,
-      onThumb: async blob => { try { const r = await api('POST', `${base}/cards/${c.id}/files?slot=thumbs&name=thumb.png`, blob, { raw: true, quiet: true }); await api('PATCH', `${base}/cards/${c.id}`, { thumb: r.file }, { quiet: true }); refresh() } catch {} } })
+      hasThumb: !!c.thumb,
+      onThumb: async blob => { try { await api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png`, blob, { raw: true, quiet: true }); refresh() } catch {} } })
   }
 
   // keep in sync with the server (worker results arrive here)
