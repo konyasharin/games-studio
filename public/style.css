@@ -450,3 +450,6 @@ body.textured .board { background-image: radial-gradient(circle, color-mix(in sr
 .theme-pick-item { width: 110px; height: 110px; border-radius: 10px; border: 2px solid var(--line); background: var(--bg2) center/cover no-repeat; position: relative; padding: 0; }
 .theme-pick-item.on { border-color: var(--accent); }
 .theme-pick-item span { position: absolute; left: 4px; bottom: 4px; font-size: 10.5px; background: rgba(0,0,0,.65); color: #fff; border-radius: 5px; padding: 1px 6px; }
+.side a.side-cover { display: flex; flex-direction: column; justify-content: flex-end; border-radius: 0; padding: 14px 14px 12px; color: var(--fg); }
+.side a.side-cover:hover { background-color: transparent; filter: brightness(1.06); }
+.side-cover .sc-title { line-height: 1.25; }
