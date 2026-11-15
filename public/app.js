@@ -208,6 +208,7 @@ async function boardPage(view, pid, bid, tok) {
     ...['ref', 'split', 'part', 'model', 'final', 'note'].map(t => h('button', { class: 'btn sm', onclick: () => addCard(t) }, '+ ' + TYPES[t])))
   let ctxOpen = false
   const right = h('div', { class: 'board-right' }, zoomInd,
+    h('button', { class: 'btn sm', title: 'Разложить карточки по этапам слева направо', onclick: () => layout() }, 'Выровнять'),
     h('button', { class: 'btn sm', title: 'Показать всё', onclick: () => fit() }, 'Всё'),
     h('button', { class: 'btn sm', onclick: () => { ctxOpen = !ctxOpen; renderCtx() } }, 'Контекст для Claude'))
   el.append(tools, right)
@@ -235,7 +236,7 @@ async function boardPage(view, pid, bid, tok) {
     if (e.target.closest('textarea, .card-b') && !e.ctrlKey) return
     e.preventDefault()
     const r = el.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top
-    const nz = Math.min(2, Math.max(0.2, cam.z * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))))
+    const nz = Math.min(2, Math.max(0.1, cam.z * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))))
     cam.x = mx - (mx - cam.x) * nz / cam.z; cam.y = my - (my - cam.y) * nz / cam.z; cam.z = nz
     applyCam(); saveCam()
   }, { passive: false })
@@ -243,9 +244,100 @@ async function boardPage(view, pid, bid, tok) {
     if (!B.cards.length) return
     const xs = B.cards.map(c => c.x), ys = B.cards.map(c => c.y), xe = B.cards.map(c => c.x + (c.w || 380)), ye = B.cards.map(c => c.y + (nodes.get(c.id)?.offsetHeight || 400))
     const r = el.getBoundingClientRect(), x0 = Math.min(...xs) - 60, y0 = Math.min(...ys) - 80, x1 = Math.max(...xe) + 60, y1 = Math.max(...ye) + 60
-    cam.z = Math.min(1.2, Math.max(0.2, Math.min(r.width / (x1 - x0), r.height / (y1 - y0))))
+    cam.z = Math.min(1.2, Math.max(0.1, Math.min(r.width / (x1 - x0), r.height / (y1 - y0))))
     cam.x = (r.width - (x1 - x0) * cam.z) / 2 - x0 * cam.z; cam.y = (r.height - (y1 - y0) * cam.z) / 2 - y0 * cam.z + 20
     applyCam(); saveCam()
+  }
+
+  // auto layout: columns by stage (longest path from the roots), order inside a column by the parents'
+  // positions (barycenter sweeps, fewer crossings), each card centred on its parents without overlaps
+  async function layout({ quiet = false } = {}) {
+    const cards = B.cards, ids = new Set(cards.map(c => c.id))
+    const links = B.links.filter(l => ids.has(l.from) && ids.has(l.to) && l.from !== l.to)
+    const parents = new Map(cards.map(c => [c.id, []])), kids = new Map(cards.map(c => [c.id, []]))
+    for (const l of links) { parents.get(l.to).push(l.from); kids.get(l.from).push(l.to) }
+    const linked = cards.filter(c => parents.get(c.id).length || kids.get(c.id).length)
+    const loose = cards.filter(c => !parents.get(c.id).length && !kids.get(c.id).length)
+    // columns are pipeline stages by card type; a card linked from the same or a later stage moves one column right
+    const STAGE = { ref: 0, split: 1, part: 2, model: 3, final: 4 }
+    const layer = new Map()
+    const stageOf = (cid, seen = new Set()) => {
+      if (layer.has(cid)) return layer.get(cid)
+      if (seen.has(cid)) return 0
+      seen.add(cid)
+      const c = byIdAll.get(cid)
+      const fromParents = Math.max(-1, ...parents.get(cid).map(pid => stageOf(pid, seen))) + 1
+      const d = c.type in STAGE ? Math.max(STAGE[c.type], c.type === 'final' ? 0 : fromParents) : fromParents
+      layer.set(cid, d); return d
+    }
+    const byIdAll = new Map(cards.map(c => [c.id, c]))
+    linked.forEach(c => stageOf(c.id))
+    const maxL = Math.max(0, ...layer.values())
+    for (const c of linked) if (c.type === 'final') layer.set(c.id, maxL)
+    const cols = []
+    for (const c of linked) (cols[layer.get(c.id)] ||= []).push(c)
+    cols.forEach(col => col.sort((a, b) => a.y - b.y))
+    const idx = () => { const m = new Map(); cols.forEach(col => col?.forEach((c, i) => m.set(c.id, i))); return m }
+    for (let sweep = 0; sweep < 6; sweep++) {
+      const down = sweep % 2 === 0, pos = idx()
+      const order = down ? cols.map((_, i) => i) : cols.map((_, i) => i).reverse()
+      for (const li of order) {
+        const col = cols[li]; if (!col) continue
+        const bary = c => { const ns = (down ? parents : kids).get(c.id).filter(x => pos.has(x)); return ns.length ? ns.reduce((a, x) => a + pos.get(x), 0) / ns.length : pos.get(c.id) }
+        const keyed = col.map(c => [bary(c), pos.get(c.id), c])
+        keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+        cols[li] = keyed.map(k => k[2])
+        cols[li].forEach((c, i) => pos.set(c.id, i))
+      }
+    }
+    const H = c => nodes.get(c.id)?.offsetHeight || 400, W = c => c.w || 380
+    const GX = 150, GY = 56, out = {}
+    let x = 80
+    const center = {}
+    cols.forEach((col, li) => {
+      if (!col) return
+      const colW = Math.max(...col.map(W))
+      // desired tops from the parents' centres, then pushed down so nothing overlaps
+      const placed = col.map(c => {
+        const ps = parents.get(c.id).filter(pid => center[pid] != null)
+        const want = ps.length ? ps.reduce((a, pid) => a + center[pid], 0) / ps.length - H(c) / 2 : null
+        return { c, want }
+      })
+      let y = 80
+      for (const it of placed) {
+        let top = it.want == null ? y : Math.max(it.want, y)
+        it.top = top; y = top + H(it.c) + GY
+      }
+      for (const it of placed) {
+        out[it.c.id] = [x + (colW - W(it.c)) / 2, it.top]
+        center[it.c.id] = it.top + H(it.c) / 2
+      }
+      x += colW + GX
+    })
+    // roots and other parent-free cards: centre on their children where possible
+    for (const col of cols.slice(0, 1)) {
+      if (!col) continue
+      let y = -Infinity
+      for (const c of col) {
+        const ks = kids.get(c.id).filter(k => center[k] != null)
+        const want = ks.length ? ks.reduce((a, k) => a + center[k], 0) / ks.length - H(c) / 2 : out[c.id][1]
+        const top = Math.max(want, y === -Infinity ? -1e9 : y)
+        out[c.id][1] = top; y = top + H(c) + GY
+      }
+    }
+    // loose cards (notes) in a column after the last one
+    let ly = 80
+    for (const c of loose) { out[c.id] = [x, ly]; ly += H(c) + GY }
+    // keep the whole thing near the origin
+    const minY = Math.min(...Object.values(out).map(v => v[1]))
+    for (const v of Object.values(out)) v[1] += 80 - minY
+    try {
+      await api('POST', `${base}/layout`, { positions: out })
+      for (const c of cards) if (out[c.id]) { c.x = out[c.id][0]; c.y = out[c.id][1] }
+      for (const c of cards) { const n = nodes.get(c.id); if (n) { n.style.left = c.x + 'px'; n.style.top = c.y + 'px' } }
+      drawLinks(); fit()
+      if (!quiet) toast('Карточки разложены по этапам')
+    } catch {}
   }
 
   // cards are kept as DOM nodes keyed by id; a card being edited or dragged is not rebuilt under the user
@@ -409,7 +501,7 @@ async function boardPage(view, pid, bid, tok) {
   async function confirmSplit(c) {
     if (confirming) return
     confirming = true
-    try { const r = await api('POST', `${base}/cards/${c.id}/confirm-split`); toast(`Создано частей: ${r.created}`) } catch {} finally { confirming = false; refresh() }
+    try { const r = await api('POST', `${base}/cards/${c.id}/confirm-split`); toast(`Создано частей: ${r.created}`); await refresh(); await new Promise(r => requestAnimationFrame(r)); await layout({ quiet: true }) } catch {} finally { confirming = false; refresh() }
   }
 
   const BODY = {

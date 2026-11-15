@@ -376,6 +376,18 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/confirm-split', async (
     return { created: todo.length }
   })
 })
+// many card positions in one write (auto layout): {positions: {cardId: [x, y]}}
+route('POST', '/api/projects/:pid/boards/:bid/layout', async (req, m) => {
+  const p = await project(m.pid); const { positions } = await json(req)
+  if (!positions || typeof positions !== 'object') throw httpError(400, 'positions')
+  return mutateBoard(p, m.bid, b => {
+    for (const c of b.cards) {
+      const v = positions[c.id]
+      if (Array.isArray(v) && Number.isFinite(v[0]) && Number.isFinite(v[1])) { c.x = Math.round(v[0]); c.y = Math.round(v[1]) }
+    }
+    return { version: b.version + 1 }
+  })
+})
 route('POST', '/api/projects/:pid/boards/:bid/links', async (req, m) => {
   const p = await project(m.pid); const { from, to } = await json(req)
   return mutateBoard(p, m.bid, b => {
