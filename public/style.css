@@ -252,3 +252,61 @@ select.count { background: var(--bg2); border: 1px solid var(--line); border-rad
 .editor details.raw summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 .editor svg.viz { width: 100%; height: auto; display: block; margin: 12px 0; }
 .editor .quote { font: 500 17px var(--display); color: #dfe3ec; border-left: 3px solid var(--accent); padding: 4px 16px; margin: 16px 0; }
+
+/* ---------- Claude assist: pointing, pins, threads, chat ---------- */
+.top-btn { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 13px; color: var(--fg); font-weight: 500; }
+.top-btn:hover { border-color: var(--line2); }
+.top-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.top-btn:disabled { opacity: .4; cursor: default; }
+body.pointing #view, body.pointing #view * { cursor: crosshair !important; }
+.point-hover { outline: 2px solid var(--accent2) !important; outline-offset: 3px; border-radius: 6px; background-color: rgba(226,56,77,.06); }
+.point-frame { position: fixed; z-index: 70; border: 2px dashed var(--accent2); background: rgba(226,56,77,.08); border-radius: 8px; pointer-events: none; }
+.assist-pop { position: fixed; z-index: 80; width: min(440px, calc(100vw - 24px)); background: var(--panel); border: 1px solid var(--line2); border-radius: 14px; box-shadow: var(--shadow); padding: 14px; display: flex; flex-direction: column; gap: 10px; animation: up .15s ease-out; }
+.assist-pop > div { display: flex; flex-direction: column; gap: 10px; }
+.pop-where { font-size: 12px; color: var(--accent2); display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.assist-pop textarea.prompt { min-height: 80px; }
+.thread .msgs { max-height: 46vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { border-radius: 11px; padding: 8px 11px; font-size: 13.5px; line-height: 1.5; }
+.msg .who { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 2px; color: var(--dim); }
+.msg.user { background: #2a2230; border: 1px solid rgba(226,56,77,.3); align-self: flex-end; max-width: 92%; }
+.msg.claude { background: var(--bg2); border: 1px solid var(--line); max-width: 96%; }
+.msg .body p { margin: 0 0 6px; } .msg .body p:last-child { margin: 0; } .msg .body ul { margin: 4px 0; padding-left: 18px; }
+.msg .body code, .bubble code { background: rgba(0,0,0,.3); border-radius: 4px; padding: 0 4px; font-size: 12px; overflow-wrap: anywhere; }
+.typing { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.pin { position: absolute; z-index: 9; width: 26px; height: 26px; border-radius: 50% 50% 50% 4px; border: 2px solid #fff; background: var(--info); color: #fff; font: 700 12px var(--body); display: grid; place-items: center; box-shadow: 0 4px 12px rgba(0,0,0,.45); padding: 0; transition: transform .12s; }
+.pin:hover { transform: scale(1.15); }
+.pin.running, .pin.queued { background: var(--warn); animation: pulse 1.4s infinite; }
+.pin.done { background: var(--ok); } .pin.error, .pin.cancelled { background: var(--accent); }
+.pin.in-world { transform-origin: 0 100%; }
+.pin.in-world { width: 34px; height: 34px; font-size: 15px; }
+
+.chat { position: fixed; right: 0; top: 52px; bottom: 0; width: 440px; max-width: 100vw; z-index: 40; background: #12151c; border-left: 1px solid var(--line); display: flex; flex-direction: column; box-shadow: -10px 0 30px rgba(0,0,0,.35); }
+body.chat-open main { margin-right: 440px; }
+.chat-h { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.chat-h b { font: 600 16px var(--display); }
+.chat-sess { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.chat-sess a { color: #ff8b99; }
+.chat-log { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 9px; }
+.chat-empty { color: var(--muted); font-size: 13px; text-align: center; margin: auto 10px; }
+.bubble { border-radius: 14px; padding: 9px 13px; font-size: 14px; line-height: 1.55; max-width: 92%; overflow-wrap: anywhere; }
+.bubble.user { align-self: flex-end; background: linear-gradient(180deg, #b02a3d, #8f2232); color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
+.bubble.claude { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.bubble.claude p { margin: 0 0 7px; } .bubble.claude p:last-child { margin: 0; } .bubble.claude ul { margin: 4px 0; padding-left: 18px; }
+.bubble.claude pre { background: rgba(0,0,0,.3); border-radius: 8px; padding: 8px; white-space: pre-wrap; font-size: 12px; }
+.bubble.err { background: rgba(226,56,77,.12); border: 1px solid rgba(226,56,77,.4); color: #ffb3bd; font-size: 13px; }
+details.tools { align-self: flex-start; font-size: 12px; color: var(--muted); max-width: 92%; }
+details.tools summary { cursor: pointer; list-style: none; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; display: inline-block; }
+details.tools .tool { padding: 3px 8px; border-left: 2px solid var(--line2); margin: 4px 0 0 8px; overflow-wrap: anywhere; }
+details.tools .tool b { color: #b9d3fb; font-weight: 600; }
+.task { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--bg2); display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+.task-h { display: flex; justify-content: space-between; align-items: center; }
+.task-h .k { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--accent2); font-weight: 600; }
+.task-t { font-weight: 600; }
+.task-l { color: var(--muted); } .task-l p { margin: 0 0 4px; }
+.task .btn { align-self: flex-start; }
+.chat-foot { border-top: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px; align-items: flex-end; }
+.chat-in { flex: 1; resize: none; background: var(--bg2); border: 1px solid var(--line2); border-radius: 12px; padding: 9px 12px; outline: none; max-height: 200px; line-height: 1.45; }
+.chat-in:focus { border-color: #5a6380; }
+.callout.changed { position: sticky; top: 0; z-index: 3; }
+@media (max-width: 900px) { body.chat-open main { margin-right: 0; } }
+.chat-in { overflow-y: auto; scrollbar-width: thin; min-height: 40px; }

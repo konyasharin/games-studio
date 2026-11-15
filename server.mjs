@@ -7,6 +7,7 @@ import path from 'node:path'
 import { spawn, execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
+import os from 'node:os'
 
 const APP = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(APP, '..') // the Projects folder
@@ -56,6 +57,25 @@ async function withLock(key, fn) {
 }
 
 const registryFile = path.join(DATA, 'projects.json')
+// one Claude session per project, continued with --resume; a session made on another machine is not reused
+const sessionsFile = path.join(DATA, 'sessions.json')
+async function sessionFor(pid, { fresh = false } = {}) {
+  return withLock(sessionsFile, async () => {
+    const all = await readJSON(sessionsFile, {})
+    let sess = all[pid]
+    if (fresh || !sess || sess.machine !== os.hostname()) {
+      sess = { id: crypto.randomUUID(), machine: os.hostname(), created: now(), started: false, jobs: 0 }
+      all[pid] = sess; await writeJSON(sessionsFile, all)
+    }
+    return { ...sess }
+  })
+}
+async function sessionUsed(pid, sid) {
+  await withLock(sessionsFile, async () => {
+    const all = await readJSON(sessionsFile, {})
+    if (all[pid]?.id === sid) { all[pid].started = true; all[pid].jobs = (all[pid].jobs || 0) + 1; all[pid].last = now(); await writeJSON(sessionsFile, all) }
+  })
+}
 const settingsFile = path.join(DATA, 'settings.json')
 const DEFAULT_SETTINGS = { flowUrl: 'https://flow.google.com/', imageModel: 'Nano Banana Pro', worker: true }
 const settings = async () => ({ ...DEFAULT_SETTINGS, ...(await readJSON(settingsFile, {})) })
@@ -156,6 +176,11 @@ async function mutateJob(jid, fn) {
 const publicJob = j => { const { token, pid, ...rest } = j; return rest }
 const active = j => ['queued', 'running'].includes(j.status)
 
+function toolBrief(name, input = {}) {
+  const v = input.file_path || input.path || input.command || input.pattern || input.url || input.query || input.description || input.prompt || ''
+  return String(v).replace(/\s+/g, ' ').slice(0, 160)
+}
+
 function killTree(pid) {
   if (!pid) return
   try { process.platform === 'win32' ? execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {}) : process.kill(pid) } catch {}
@@ -186,33 +211,78 @@ async function workerTick() {
 async function runJob(job, s) {
   try {
     const p = await project(job.project)
-    const board = await readJSON(boardFile(p, job.board), null)
-    const card = board?.cards.find(c => c.id === job.card)
-    if (!card) throw new Error('карточка удалена')
+    const board = job.board ? await readJSON(boardFile(p, job.board), null) : null
+    const card = board?.cards.find(c => c.id === job.card) || null
+    if (!['request', 'chat'].includes(job.kind) && !card) throw new Error('карточка удалена')
+    if (job.kind === 'request' && job.board && !board) throw new Error('доска удалена')
     const template = await fsp.readFile(path.join(APP, 'worker-prompt.md'), 'utf8')
     job.token = crypto.randomBytes(16).toString('hex')
     const ctx = {
       api: `http://127.0.0.1:${PORT}`, token: job.token, job: publicJob(job), card, flowUrl: s.flowUrl, imageModel: s.imageModel,
-      projectRoot: path.join(ROOT, p.dir), boardContext: board.context || '',
+      projectId: p.id, projectRoot: path.join(ROOT, p.dir), boardContext: board?.context || '',
+      where: job.where || null, thread: job.thread || null,
       inputs: (job.inputs || []).map(f => path.join(ROOT, f)).filter(f => inside(ROOT, f)),
     }
-    const prompt = template.replace('{{JOB}}', JSON.stringify(ctx, null, 2))
+    const prompt = job.kind === 'chat'
+      ? `[Studio Board, чат проекта «${p.name || p.dir}» (${path.join(ROOT, p.dir)}). Это та же сессия, в которой ты выполняешь задачи с досок проекта. API доски: http://127.0.0.1:${PORT}/api (проект ${p.id}). Отвечай по-русски, коротко и по делу.]\n\n${job.text}`
+      : template.replace('{{JOB}}', JSON.stringify(ctx, null, 2))
     const out = fs.createWriteStream(path.join(JOBS, job.id + '.log'), { flags: 'a' })
     out.on('error', () => {})
-    const args = ['-p', '--chrome', '--permission-mode', 'auto', '--add-dir', ROOT, '--add-dir', APP]
+    const sess = await sessionFor(p.id)
+    const args = ['-p', '--chrome', '--permission-mode', 'auto', '--add-dir', ROOT, '--add-dir', APP, '--output-format', 'stream-json', '--verbose',
+      ...(sess.started ? ['--resume', sess.id] : ['--session-id', sess.id])]
+    out.write(`\n===== ${now()} session ${sess.id} (${sess.started ? 'resume' : 'new'}) =====\n`)
     const child = spawn(CLAUDE, args, { cwd: path.join(ROOT, p.dir), windowsHide: true })
     running = job.id; child_ = child
     let finished = false
     const finish = async (status, line) => {
       if (finished) return
       finished = true; clearTimeout(timer); out.end()
-      try { await mutateJob(job.id, j => { if (j.status === 'running') { j.status = status; j.log.push(now() + ' ' + line) } }) } catch {}
+      try { await mutateJob(job.id, j => { if (j.status === 'running') { j.status = status; j.log.push(now() + ' ' + line); if (j.kind === 'request') j.thread = [...(j.thread || []), { who: 'claude', text: status === 'done' ? 'Готово (без отчёта).' : 'Не получилось: ' + line, at: now() }] } }) } catch {}
       running = null; child_ = null
       setTimeout(workerTick, 500)
     }
     const timer = setTimeout(() => killTree(child.pid), 45 * 60 * 1000)
     child.on('error', e => finish('error', 'не удалось запустить Claude: ' + e.message))
-    child.on('close', code => finish(code === 0 ? 'done' : 'error', 'Claude завершился, код ' + code))
+    let tail = '', buf = '', result = null
+    const keep = d => { tail = (tail + d.toString()).slice(-4000) }
+    child.stderr.on('data', keep)
+    job.events = job.kind === 'chat' ? [] : (job.events || [])
+    child.stdout.on('data', d => {
+      keep(d); buf += d.toString()
+      let i
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1)
+        let e; try { e = JSON.parse(line) } catch { continue }
+        if (e.type === 'assistant') {
+          for (const c of e.message?.content || []) {
+            if (c.type === 'text' && c.text?.trim()) job.events.push({ t: 'text', text: c.text.slice(0, 8000), at: now() })
+            else if (c.type === 'tool_use') job.events.push({ t: 'tool', name: c.name, brief: toolBrief(c.name, c.input), at: now() })
+          }
+        } else if (e.type === 'result') result = e
+        if (job.events.length > 300) job.events.splice(0, job.events.length - 300)
+        job.updated = now()
+      }
+    })
+    child.on('close', async code => {
+      // the session is gone (deleted, or this machine never had it): start a fresh one and run the job again
+      if (code !== 0 && sess.started && /No conversation found/i.test(tail)) {
+        await sessionFor(p.id, { fresh: true })
+        if (!finished) {
+          finished = true; clearTimeout(timer); out.end()
+          try { await mutateJob(job.id, j => { if (j.status === 'running') { j.status = 'queued'; j.log.push(now() + ' сессия Claude не найдена, начинаю новую') } }) } catch {}
+          running = null; child_ = null; setTimeout(workerTick, 300)
+        }
+        return
+      }
+      await sessionUsed(p.id, sess.id).catch(() => {})
+      if (job.kind === 'chat') {
+        const ok = code === 0 && result && !result.is_error
+        try { await mutateJob(job.id, j => { j.answer = String(result?.result || '').slice(0, 20000); j.cost = result?.total_cost_usd }) } catch {}
+        return finish(ok ? 'done' : 'error', ok ? 'ответ готов' : 'Claude завершился, код ' + code)
+      }
+      finish(code === 0 ? 'done' : 'error', 'Claude завершился, код ' + code)
+    })
     child.stdin.on('error', () => {})
     child.stdout.pipe(out); child.stderr.pipe(out)
     child.stdin.end(prompt)
@@ -230,6 +300,33 @@ const route = (method, pattern, fn, opts = {}) =>
   routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn, ...opts })
 
 route('GET', '/api/settings', async () => settings())
+route('POST', '/api/projects/:pid/chat', async (req, m) => {
+  const p = await project(m.pid); const { text } = await json(req)
+  if (!String(text || '').trim()) throw httpError(400, 'пусто')
+  const j = { id: id(), kind: 'chat', project: p.id, projectDir: p.dir, board: null, card: null, cardTitle: String(text).trim().slice(0, 60),
+    status: 'queued', created: now(), log: [], text: String(text).trim().slice(0, 20000), events: [] }
+  jobs.set(j.id, j); await saveJob(j)
+  setTimeout(workerTick, 50)
+  return publicJob(j)
+})
+// the project's whole conversation: chat messages and the tasks done in the same session
+route('GET', '/api/projects/:pid/chat', async (req, m, url) => {
+  const since = url.searchParams.get('since') || ''
+  return sortedJobs().filter(j => j.project === m.pid && (!since || (j.updated || j.created) > since)).slice(-150).map(j => {
+    const { token, pid, log, ...rest } = j
+    return { ...rest, log: (log || []).slice(-3) }
+  })
+})
+route('GET', '/api/projects/:pid/session', async (req, m) => {
+  await project(m.pid)
+  const sess = (await readJSON(sessionsFile, {}))[m.pid]
+  return sess && sess.machine === os.hostname() ? { ...sess, cwd: path.join(ROOT, (await project(m.pid)).dir) } : null
+})
+route('POST', '/api/projects/:pid/session/reset', async (req, m) => {
+  await project(m.pid)
+  if ([...jobs.values()].some(j => j.project === m.pid && j.status === 'running')) throw httpError(409, 'сейчас идёт задача, дождись её')
+  return sessionFor(m.pid, { fresh: true })
+})
 route('PUT', '/api/settings', async req => {
   const body = await json(req), s = await settings()
   if (typeof body.flowUrl === 'string' && /^https:\/\//.test(body.flowUrl)) s.flowUrl = body.flowUrl
@@ -271,15 +368,48 @@ route('PATCH', '/api/projects/:pid', async (req, m) => {
   })
 })
 const notesFile = (p, sid) => path.join(projDir(p), 'notes', safeId(sid) + '.html')
-route('GET', '/api/projects/:pid/notes/:sid', async (req, m) => {
-  const p = await project(m.pid)
-  return { html: await fsp.readFile(notesFile(p, m.sid), 'utf8').catch(() => '') }
+const mtimeOf = async f => (await fsp.stat(f).catch(() => null))?.mtimeMs || 0
+route('GET', '/api/projects/:pid/notes/:sid', async (req, m, url) => {
+  const p = await project(m.pid); const f = notesFile(p, m.sid); const mtime = await mtimeOf(f)
+  if (url.searchParams.get('since') && Number(url.searchParams.get('since')) === mtime) return { mtime, same: true }
+  return { html: await fsp.readFile(f, 'utf8').catch(() => ''), mtime }
 })
 route('PUT', '/api/projects/:pid/notes/:sid', async (req, m) => {
   const p = await project(m.pid); const { html } = await json(req); const f = notesFile(p, m.sid)
   await withLock(f, () => writeAtomic(f, String(html || '')))
-  return { ok: true }
+  return { ok: true, mtime: await mtimeOf(f) }
 })
+
+// "point and tell Claude": a request anchored to a place in the project ({where}), with a thread of messages
+route('POST', '/api/projects/:pid/requests', async (req, m) => {
+  const p = await project(m.pid); const { text, where = {} } = await json(req)
+  if (!String(text || '').trim()) throw httpError(400, 'пустой запрос')
+  const w = JSON.parse(JSON.stringify(where).slice(0, 20000))
+  const j = { id: id(), kind: 'request', project: p.id, projectDir: p.dir, board: w.board || null, card: w.card || null,
+    cardTitle: String(text).trim().slice(0, 60), status: 'queued', created: now(), log: [], where: w,
+    thread: [{ who: 'user', text: String(text).trim(), at: now() }] }
+  if (j.board) safeId(j.board)
+  jobs.set(j.id, j); await saveJob(j)
+  setTimeout(workerTick, 50)
+  return publicJob(j)
+})
+route('GET', '/api/projects/:pid/requests', async (req, m, url) => {
+  const sec = url.searchParams.get('section'), board = url.searchParams.get('board')
+  return sortedJobs().filter(j => j.kind === 'request' && j.project === m.pid && !j.archived &&
+    (!sec || j.where?.section === sec) && (!board || j.board === board)).map(publicJob)
+})
+route('POST', '/api/jobs/:jid/reply', async (req, m) => {
+  const { text } = await json(req)
+  if (!String(text || '').trim()) throw httpError(400, 'пусто')
+  const j = await mutateJob(m.jid, j => {
+    if (j.kind !== 'request') throw httpError(400, 'не запрос')
+    j.thread = [...(j.thread || []), { who: 'user', text: String(text).trim(), at: now() }]
+    if (!active(j)) { j.status = 'queued'; j.log.push(now() + ' уточнение от автора') }
+  })
+  setTimeout(workerTick, 50)
+  return publicJob(j)
+})
+route('POST', '/api/jobs/:jid/archive', async (req, m) => publicJob(await mutateJob(m.jid, j => { if (!active(j)) j.archived = true })))
 route('POST', '/api/projects/:pid/boards', async (req, m) => {
   const p = await project(m.pid); const { name, kind = 'character', section = '3d' } = await json(req)
   const b = { id: id(), name: String(name || 'Без названия'), kind, version: 0, cards: [], links: [], context: '' }
@@ -529,7 +659,10 @@ route('POST', '/api/jobs/:jid/image', async (req, m, url) => {
 // finish: status + optional card patch (split proposals, prompt used)
 route('POST', '/api/jobs/:jid/complete', async (req, m, url) => {
   const j0 = workerJob(req, m, url); const body = await json(req)
-  const j = await mutateJob(j0.id, x => { x.status = body.status === 'error' ? 'error' : 'done'; x.log.push(now() + ' ' + String(body.message || 'готово').slice(0, 500)) })
+  const j = await mutateJob(j0.id, x => {
+    x.status = body.status === 'error' ? 'error' : 'done'; x.log.push(now() + ' ' + String(body.message || 'готово').slice(0, 500))
+    if (x.kind === 'request') x.thread = [...(x.thread || []), { who: 'claude', text: String(body.message || 'Готово.').slice(0, 6000), at: now() }]
+  })
   if (body.cardPatch && typeof body.cardPatch === 'object' && j.status === 'done') {
     const p = await project(j.project)
     await mutateBoard(p, j.board, b => {

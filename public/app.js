@@ -1,4 +1,5 @@
 // Studio Board front end: projects -> sections -> boards with linked cards.
+import { initAssist } from '/assist.js'
 const $ = (s, el = document) => el.querySelector(s)
 const h = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag)
@@ -73,6 +74,7 @@ function confirm2(text, yes = 'Удалить') {
 
 // ---------- router ----------
 let current = null // { stop() }
+let ctxNow = {} // where the user is: read by the Claude assist (pointing, pins, chat)
 let navSeq = 0
 const stale = tok => tok !== navSeq
 function crumbs(items) {
@@ -90,6 +92,7 @@ async function route() {
       : parts[0] === 'p' ? await projectPage(view, parts[1], parts[2] || '3d', tok) : await homePage(view, tok)
     if (stale(tok)) { page?.stop?.(); return }
     current = page
+    assist.pageChanged()
   } catch (e) {
     if (stale(tok)) return console.error(e); view.append(h('div', { class: 'page' }, h('div', { class: 'empty-note' }, 'Не удалось открыть: ' + e.message, h('br'), h('a', { href: '#/' , class: 'btn', style: { marginTop: '14px' } }, 'На главную')))) }
 }
@@ -100,6 +103,7 @@ async function homePage(view, tok) {
   const list = await api('GET', '/api/projects')
   if (stale(tok)) return
   crumbs([{ text: 'Проекты' }])
+  ctxNow = { kind: 'home' }
   const page = h('div', { class: 'page' }, h('h1', {}, 'Проекты'), h('p', { class: 'sub' }, 'Игры и всё, что к ним относится: сюжет, 3D, звук. Данные лежат в папке проекта и переживают перезапуск.'))
   const grid = h('div', { class: 'grid' })
   for (const p of list) {
@@ -130,6 +134,7 @@ async function projectPage(view, pid, sid, tok) {
     } }, '+ раздел'))
   const main = h('div', { class: 'proj-main' })
   view.append(h('div', { class: 'proj' }, side, main))
+  ctxNow = sec.kind === 'boards' ? { pid: p.id, kind: 'page' } : { pid: p.id, kind: 'notes', section: sec.id, sectionTitle: sec.title }
   if (sec.kind === 'boards') return boardsList(main, p, sec)
   return notesPage(main, p, sec, tok)
 }
@@ -158,20 +163,34 @@ async function boardsList(main, p, sec) {
 }
 
 async function notesPage(main, p, sec, tok) {
-  const { html } = await api('GET', `/api/projects/${p.id}/notes/${sec.id}`)
+  const { html, mtime: mtime0 } = await api('GET', `/api/projects/${p.id}/notes/${sec.id}`)
   if (stale(tok)) return
+  let mtime = mtime0
   const saved = h('span', { class: 'saved' }, 'Сохранено')
   const ed = h('div', { class: 'editor', contenteditable: 'true', html: html || `<h1>${esc(sec.title)}</h1><p>Пиши здесь. Сохраняется само.</p>` })
-  const save = debounce(async () => { try { await api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }); saved.textContent = 'Сохранено' } catch { saved.textContent = 'Не сохранено, повторю' ; save() } }, 700)
+  const save = debounce(async () => { try { const r = await api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }); mtime = r.mtime; saved.textContent = 'Сохранено' } catch { saved.textContent = 'Не сохранено, повторю' ; save() } }, 700)
   ed.addEventListener('input', () => { saved.textContent = 'Сохраняю…'; save() })
   const cmd = (c, v) => () => { document.execCommand(c, false, v); ed.focus(); save() }
   const bar = h('div', { class: 'editor-bar' },
     h('button', { class: 'btn sm', onclick: cmd('formatBlock', 'H1') }, 'Заголовок'), h('button', { class: 'btn sm', onclick: cmd('formatBlock', 'H2') }, 'Подзаголовок'),
     h('button', { class: 'btn sm', onclick: cmd('formatBlock', 'P') }, 'Текст'), h('button', { class: 'btn sm', onclick: cmd('bold') }, 'Ж'), h('button', { class: 'btn sm', onclick: cmd('italic') }, 'К'),
     h('button', { class: 'btn sm', onclick: cmd('insertUnorderedList') }, '• Список'), saved)
-  main.append(h('div', { class: 'page' }, bar, ed))
+  const banner = h('div', { class: 'callout warn changed', hidden: true }, h('b', {}, 'Claude изменил эту страницу'), 'Ты сейчас редактируешь её. ',
+    h('button', { class: 'btn sm', onclick: () => load(true) }, 'Показать его версию'), ' (твои несохранённые правки пропадут)')
+  async function load(force) {
+    try {
+      const r = await api('GET', `/api/projects/${p.id}/notes/${sec.id}?since=${mtime}`, undefined, { quiet: true })
+      if (r.same) return
+      const dirty = saved.textContent !== 'Сохранено' || document.activeElement === ed
+      if (dirty && !force) { banner.hidden = false; return }
+      ed.innerHTML = r.html; mtime = r.mtime; banner.hidden = true; saved.textContent = 'Сохранено'
+      if (!force) toast('Страница обновлена'); assist.pageChanged()
+    } catch {}
+  }
+  const poll = setInterval(() => !document.hidden && load(false), 4000)
+  main.append(h('div', { class: 'page' }, bar, banner, ed))
   window.addEventListener('beforeunload', save)
-  return { stop: () => { window.removeEventListener('beforeunload', save); if (saved.textContent !== 'Сохранено') api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }).catch(() => {}) } }
+  return { stop: () => { clearInterval(poll); window.removeEventListener('beforeunload', save); if (saved.textContent !== 'Сохранено') api('PUT', `/api/projects/${p.id}/notes/${sec.id}`, { html: ed.innerHTML }, { quiet: true }).catch(() => {}) } }
 }
 
 // ---------- board ----------
@@ -186,6 +205,7 @@ async function boardPage(view, pid, bid, tok) {
   const sec = p.sections.find(s => s.id === (p.boards.find(b => b.id === bid)?.section || '3d'))
   crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir, href: `#/p/${pid}/${sec?.id || '3d'}` }, { text: B.name }])
   const base = `/api/projects/${pid}/boards/${bid}`
+  ctxNow = { pid, kind: 'board', board: bid, boardName: B.name, cards: () => B.cards, world: () => world, toWorld: e => toWorld(e) }
   const el = h('div', { class: 'board' }); view.append(el)
   // a file dropped between cards must not make the browser leave the app
   el.addEventListener('dragover', e => e.preventDefault())
@@ -359,7 +379,7 @@ async function boardPage(view, pid, bid, tok) {
       nodes.set(c.id, fresh)
     }
     for (const [cid, n] of nodes) if (!seen.has(cid)) { n.remove(); nodes.delete(cid) }
-    requestAnimationFrame(drawLinks)
+    requestAnimationFrame(() => { drawLinks(); assist.boardRendered() })
   }
   function anchor(cid, side) {
     const c = B.cards.find(x => x.id === cid), n = nodes.get(cid); if (!c || !n) return null
@@ -627,4 +647,5 @@ function renderQueue(jobs) {
 }
 $('#queueBtn').addEventListener('click', async () => { const p = $('#queuePanel'); p.hidden = !p.hidden; if (!p.hidden) renderQueue(await api('GET', '/api/jobs', undefined, { quiet: true }).catch(() => [])) })
 
+const assist = initAssist({ api, h, toast, getCtx: () => ctxNow, confirm2 })
 route(); queuePoll()
