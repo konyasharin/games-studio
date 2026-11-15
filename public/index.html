@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="/style.css">
+<link rel="icon" href="/icon.svg">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/">Studio<span>Board</span></a>
+  <nav class="crumbs" id="crumbs"></nav>
+  <div class="top-right">
+    <button class="queue-btn" id="queueBtn" title="Очередь задач Claude"><span class="dot" id="queueDot"></span><span id="queueText">Очередь</span></button>
+    <span class="conn" id="conn" title="Связь с сервером"></span>
+  </div>
+</header>
+<main id="view"></main>
+<aside class="queue-panel" id="queuePanel" hidden></aside>
+<div class="toasts" id="toasts"></div>
+<div class="modal" id="modal" hidden></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

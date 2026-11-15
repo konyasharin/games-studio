@@ -1,0 +1,9 @@
+{
+  "name": "studio-board",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local board for game projects: character boards with linked cards, generation queue run by a background Claude.",
+  "scripts": { "start": "node supervisor.mjs", "server": "node server.mjs" },
+  "engines": { "node": ">=20" }
+}
