@@ -300,6 +300,47 @@ const route = (method, pattern, fn, opts = {}) =>
   routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn, ...opts })
 
 route('GET', '/api/settings', async () => settings())
+// open a project file on this computer: reveal it in the file manager, or load it into Blender
+const BLENDER_DEFAULT = process.platform === 'win32' ? 'C:/Program Files (x86)/Steam/steamapps/common/Blender/blender.exe'
+  : process.platform === 'darwin' ? '/Applications/Blender.app/Contents/MacOS/Blender' : 'blender'
+route('POST', '/api/open', async req => {
+  const { file, how = 'folder' } = await json(req)
+  const abs = path.resolve(ROOT, String(file || ''))
+  if (!inside(ROOT, abs)) throw httpError(403, 'outside')
+  if (!(await fsp.stat(abs).catch(() => null))?.isFile()) throw httpError(404, 'нет файла')
+  const detached = (cmd, args) => { const ch = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: false }); ch.on('error', e => console.error(now(), 'open', e.message)); ch.unref() }
+  if (how === 'folder') {
+    if (process.platform === 'win32') detached('explorer.exe', ['/select,' + path.win32.normalize(abs)])
+    else if (process.platform === 'darwin') detached('open', ['-R', abs])
+    else detached('xdg-open', [path.dirname(abs)])
+    return { ok: true }
+  }
+  if (how === 'blender') {
+    const blender = (await readJSON(settingsFile, {})).blender || BLENDER_DEFAULT
+    const ext = path.extname(abs).toLowerCase()
+    if (ext === '.blend') { detached(blender, [abs]); return { ok: true } }
+    const imp = { '.fbx': 'bpy.ops.import_scene.fbx', '.glb': 'bpy.ops.import_scene.gltf', '.gltf': 'bpy.ops.import_scene.gltf', '.obj': 'bpy.ops.wm.obj_import' }[ext]
+    if (!imp) throw httpError(400, 'Blender не открывает ' + ext)
+    // after the window is up: clear the startup scene's objects, import, frame the model
+    const py = [
+      'import bpy',
+      'def go():',
+      '    for o in list(bpy.data.objects): bpy.data.objects.remove(o)',
+      `    ${imp}(filepath=${JSON.stringify(abs)})`,
+      '    try:',
+      '        for w in bpy.context.window_manager.windows:',
+      '            for a in w.screen.areas:',
+      "                if a.type == 'VIEW_3D':",
+      "                    with bpy.context.temp_override(window=w, area=a, region=[r for r in a.regions if r.type == 'WINDOW'][0]):",
+      '                        bpy.ops.view3d.view_all()',
+      '    except Exception as e: print("view_all", e)',
+      'bpy.app.timers.register(go, first_interval=1.0)',
+    ].join(String.fromCharCode(10))
+    detached(blender, ['--python-expr', py])
+    return { ok: true }
+  }
+  throw httpError(400, 'how')
+})
 route('POST', '/api/projects/:pid/chat', async (req, m) => {
   const p = await project(m.pid); const { text } = await json(req)
   if (!String(text || '').trim()) throw httpError(400, 'пусто')
@@ -551,7 +592,7 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/files', async (req, m, 
   return mutateBoard(p, m.bid, b => {
     const c = findCard(b, m.cid)
     const item = { file: entry, name, at: now(), size: buf.length }
-    if (slot === 'thumb') c.thumb = entry
+    if (slot === 'thumb') { c.thumb = entry; c.thumbOf = url.searchParams.get('of') || null }
     else c[slot] = [...(c[slot] || []), item]
     return item
   })

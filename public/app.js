@@ -530,6 +530,7 @@ async function boardPage(view, pid, bid, tok) {
         h('div', { class: 'row lb-bar' }, sideIcon(side), h('span', { class: 'more' }, SIDE[side].name),
           h('button', { class: 'btn primary', disabled: picked, onclick: () => { closeModal(); pick(c, cur) } }, picked ? (side === 'front' || side === 'sheet' ? 'Главный вид' : 'Выбран для этой стороны') : side === 'front' || side === 'sheet' ? 'Сделать главным' : `Выбрать для вида «${SIDE[side].name.toLowerCase()}»`),
           h('div', { class: 'seg', title: 'Какая это сторона (поправь, если определилась неверно)' }, ...[...SIDES.map(x => x[0]), 'sheet'].map(k => h('button', { class: k === side ? 'on' : '', onclick: () => { closeModal(); api('POST', `${base}/cards/${c.id}/variant`, { file: cur.file, view: k }).then(refresh).catch(() => {}) } }, SIDE[k].short))),
+          h('button', { class: 'btn', title: 'Открыть папку с картинкой, например чтобы перетащить её в Tripo', onclick: () => openFile(cur.file, 'folder') }, '📂 Показать в папке'),
           h('a', { class: 'btn', href: fileUrl(cur.file), target: '_blank' }, 'Открыть файл'),
           h('button', { class: 'btn ghost', onclick: closeModal }, 'Закрыть')),
         cur.prompt ? h('details', { class: 'lb-prompt' }, h('summary', {}, 'Промпт, с которым сделана картинка'), h('div', {}, cur.prompt)) : '')
@@ -669,20 +670,37 @@ async function boardPage(view, pid, bid, tok) {
       const st = statusLine(c); if (st) b.append(st)
     },
   }
+  const isModel = f => /\.(glb|gltf|fbx|obj|blend)$/i.test(f)
+  const openFile = (file, how) => api('POST', '/api/open', { file, how }).then(() => toast(how === 'blender' ? 'Открываю в Blender…' : 'Открываю папку…')).catch(() => {})
   function fileLine(c, f, slot) {
     return h('div', { class: 'file-line' }, h('span', { title: f.file }, f.name || f.file.split('/').at(-1)),
-      /\.(glb|gltf|fbx|obj)$/i.test(f.file) ? h('button', { class: 'btn sm ghost', onclick: () => openViewer(c, f) }, '3D') : null,
-      h('a', { class: 'btn sm ghost', href: fileUrl(f.file), download: '' }, '↓'))
+      /\.(glb|gltf|fbx|obj)$/i.test(f.file) ? h('button', { class: 'btn sm ghost', title: 'Посмотреть здесь', onclick: () => openViewer(c, f) }, '3D') : null,
+      isModel(f.file) ? h('button', { class: 'btn sm ghost', title: 'Открыть в Blender', onclick: () => openFile(f.file, 'blender') }, 'B') : null,
+      h('button', { class: 'btn sm ghost', title: 'Показать в папке (например, чтобы перетащить в Tripo)', onclick: () => openFile(f.file, 'folder') }, '📂'),
+      h('a', { class: 'btn sm ghost', href: fileUrl(f.file), download: '', title: 'Скачать' }, '↓'))
   }
+  // the preview prefers the textured model; a thumbnail made from another file is rebuilt in the background
+  const thumbing = new Set()
   function modelThumb(c, f) {
     if (!f) return h('div', { class: 'model-thumb' }, 'Модели пока нет')
-    return h('div', { class: 'model-thumb', style: c.thumb ? { backgroundImage: `url("${fileUrl(c.thumb)}")` } : {}, onclick: () => openViewer(c, f) }, c.thumb ? '' : 'Открыть 3D')
+    const viewable = /\.(glb|gltf|fbx|obj)$/i.test(f.file)
+    if (viewable && c.thumbOf !== f.file && !thumbing.has(c.id + f.file)) {
+      thumbing.add(c.id + f.file)
+      import('/viewer.js').then(({ makeThumb }) => makeThumb(fileUrl(f.file)))
+        .then(blob => blob && api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(f.file)}`, blob, { raw: true, quiet: true }))
+        .then(() => refresh()).catch(e => console.warn('thumb', f.file, e))
+    }
+    const textured = (c.textured || []).some(x => x.file === f.file)
+    return h('div', { class: 'model-thumb', style: c.thumb ? { backgroundImage: `url("${fileUrl(c.thumb)}")` } : {}, onclick: () => viewable ? openViewer(c, f) : openFile(f.file, 'blender') },
+      c.thumb ? '' : viewable ? 'Открыть 3D' : 'Открыть в Blender',
+      c.type === 'model' ? h('span', { class: 'thumb-tag' + (textured ? ' tex' : '') }, textured ? 'с текстурой' : 'сетка') : null)
   }
   async function openViewer(c, f) {
     const { showModel } = await import('/viewer.js')
     showModel({ url: fileUrl(f.file), name: f.name || f.file, openModal, closeModal, toast,
       hasThumb: !!c.thumb,
-      onThumb: async blob => { try { await api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png`, blob, { raw: true, quiet: true }); refresh() } catch {} } })
+      onOpen: how => openFile(f.file, how),
+      onThumb: async blob => { try { await api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(f.file)}`, blob, { raw: true, quiet: true }); refresh() } catch {} } })
   }
 
   // keep in sync with the server (worker results arrive here)
