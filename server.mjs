@@ -36,7 +36,7 @@ async function writeAtomic(f, data) {
   const tmp = f + '.' + id() + '.tmp'
   await fsp.writeFile(tmp, data)
   for (let i = 0; ; i++) {
-    try { await fsp.rename(tmp, f); return } catch (e) {
+    try { await fsp.rename(tmp, f); backupSoon(f); return } catch (e) {
       if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code) || i >= 20) { await fsp.rm(tmp, { force: true }).catch(() => {}); throw e }
       await sleep(50 + i * 25)
     }
@@ -135,6 +135,55 @@ async function serveFile(res, file) {
   s.on('error', () => res.destroy())
   s.pipe(res)
 }
+
+// ---------- cloud copy: every project's studio data mirrored into the Google Drive folder ----------
+// Additive: files are copied when new or changed, never deleted from the copy, so anything removed locally can be
+// restored from the cloud. The app's own project list goes to <backup>/studio-board/data/.
+const BACKUP_DEFAULT = process.platform === 'win32' ? path.join(os.homedir(), 'code', 'google-drive-sync') : null
+const backupRoot = async () => {
+  const b = (await readJSON(settingsFile, {})).backup
+  const dir = b === false ? null : b || BACKUP_DEFAULT
+  return dir && fs.existsSync(dir) ? dir : null
+}
+const backupState = { last: null, files: 0, error: null, running: false }
+async function mirror(src, dst) {
+  let n = 0
+  let entries; try { entries = await fsp.readdir(src, { withFileTypes: true }) } catch { return 0 }
+  for (const e of entries) {
+    if (e.name.endsWith('.tmp')) continue
+    const s = path.join(src, e.name), d = path.join(dst, e.name)
+    if (e.isDirectory()) { n += await mirror(s, d); continue }
+    const [a, b] = await Promise.all([fsp.stat(s), fsp.stat(d).catch(() => null)])
+    if (b && b.size === a.size && b.mtimeMs >= a.mtimeMs) continue
+    await fsp.mkdir(dst, { recursive: true })
+    await fsp.copyFile(s, d); n++
+  }
+  return n
+}
+async function backupNow(dirs) {
+  const root = await backupRoot(); if (!root || backupState.running) return
+  backupState.running = true
+  try {
+    const reg = await readJSON(registryFile, [])
+    let n = 0
+    for (const p of reg) if (!dirs || dirs.has(p.dir)) n += await mirror(projDir(p), path.join(root, p.dir, 'studio'))
+    for (const f of ['projects.json', 'settings.json', 'sessions.json']) {
+      const s = path.join(DATA, f); if (!fs.existsSync(s)) continue
+      await fsp.mkdir(path.join(root, 'studio-board', 'data'), { recursive: true }); await fsp.copyFile(s, path.join(root, 'studio-board', 'data', f))
+    }
+    backupState.last = now(); backupState.files += n; backupState.error = null
+  } catch (e) { backupState.error = e.message; console.error(now(), 'backup', e.message) } finally { backupState.running = false }
+}
+const pendingDirs = new Set(); let backupTimer = null
+function backupSoon(file) {
+  const rel = path.relative(ROOT, file)
+  if (!rel.startsWith('..')) pendingDirs.add(rel.split(path.sep)[0])
+  else if (!inside(DATA, file)) return
+  clearTimeout(backupTimer)
+  backupTimer = setTimeout(() => { const d = new Set(pendingDirs); pendingDirs.clear(); backupNow(d) }, 3000)
+}
+setTimeout(() => backupNow(), 5000)
+setInterval(() => backupNow(), 10 * 60 * 1000)
 
 // ---------- boards ----------
 function characterTemplate(board) {
@@ -432,6 +481,8 @@ const route = (method, pattern, fn, opts = {}) =>
   routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn, ...opts })
 
 route('GET', '/api/settings', async () => ({ ...(await settings()), root: ROOT }))
+route('GET', '/api/backup', async () => ({ ...backupState, dir: await backupRoot() }))
+route('POST', '/api/backup', async () => { await backupNow(); return { ...backupState, dir: await backupRoot() } })
 // a file dropped into the chat: kept in the project's inbox, its full path goes into the message
 route('POST', '/api/projects/:pid/inbox', async (req, m, url) => {
   const p = await project(m.pid)
@@ -439,6 +490,7 @@ route('POST', '/api/projects/:pid/inbox', async (req, m, url) => {
   const dir = path.join(projDir(p), 'inbox'); await fsp.mkdir(dir, { recursive: true })
   const f = path.join(dir, new Date().toISOString().slice(0, 10) + '-' + Date.now().toString(36).slice(-4) + '-' + name)
   await fsp.writeFile(f, await readBody(req))
+  backupSoon(f)
   return { path: f, file: toRel(f) }
 })
 // open a project file on this computer: reveal it in the file manager, or load it into Blender
@@ -466,6 +518,7 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/tripo-files', async (re
     } catch {}
   }
   if (!files.length) throw httpError(404, 'у карточки нет выбранных сторон')
+  backupSoon(files[0])
   revealMany(dir, files)
   return { dir: toRel(dir), files: files.map(toRel) }
 })
@@ -800,6 +853,7 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/files', async (req, m, 
   const dir = assetDir(p, m.bid, m.cid); await fsp.mkdir(dir, { recursive: true })
   const file = path.join(dir, Date.now().toString(36) + '-' + name)
   await fsp.writeFile(file, buf)
+  backupSoon(file)
   let entry = toRel(file)
   if (/\.zip$/i.test(name)) entry = (await unzipModel(file)) || entry
   return mutateBoard(p, m.bid, b => {
@@ -840,6 +894,7 @@ function unzipModel(zip) {
         const rec = async d => { for (const e of await fsp.readdir(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (!inside(out, f)) continue; e.isDirectory() ? await rec(f) : all.push(f) } }
         await rec(out)
         const model = all.find(f => /\.(glb|gltf|fbx|obj)$/i.test(f))
+        backupSoon(zip)
         resolve(model ? toRel(model) : null)
       } catch { resolve(null) }
     })
@@ -915,6 +970,7 @@ route('POST', '/api/jobs/:jid/image', async (req, m, url) => {
   const dir = assetDir(p, j.board, j.card); await fsp.mkdir(dir, { recursive: true })
   const file = path.join(dir, `${j.id}-${Date.now().toString(36)}-${id()}.${ext}`)
   await fsp.writeFile(file, buf)
+  backupSoon(file)
   const rel = toRel(file)
   const item = { file: rel, at: now(), job: j.id, prompt: (url.searchParams.get('prompt') || j.prompt || '').slice(0, 4000), view: url.searchParams.get('view') || '' }
   await mutateBoard(p, j.board, b => { const c = findCard(b, j.card); c.variants = [...(c.variants || []), item] })

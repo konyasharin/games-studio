@@ -880,5 +880,22 @@ function renderQueue(jobs) {
 }
 $('#queueBtn').addEventListener('click', async () => { const p = $('#queuePanel'); p.hidden = !p.hidden; if (!p.hidden) renderQueue(await api('GET', '/api/jobs', undefined, { quiet: true }).catch(() => [])) })
 
+// cloud copy indicator: green when the last mirror into Google Drive succeeded; click = copy now
+const cloud = h('button', { class: 'cloud-btn', title: 'Копия в облаке' }, '☁')
+$('.top-right').insertBefore(cloud, $('#conn'))
+async function cloudPoll(force) {
+  try {
+    const b = await api(force ? 'POST' : 'GET', '/api/backup', undefined, { quiet: true })
+    cloud.className = 'cloud-btn ' + (!b.dir ? 'off' : b.error ? 'err' : b.running ? 'run' : b.last ? 'ok' : '')
+    cloud.title = !b.dir ? 'Папка Google Drive не найдена: копия в облако выключена' : b.error ? 'Ошибка копии в облако: ' + b.error
+      : `Копия в облаке: ${b.dir}
+последняя: ${b.last ? new Date(b.last).toLocaleString('ru') : 'ещё не было'}
+клик — скопировать сейчас`
+    if (force) toast(b.error ? 'Копия в облако не удалась' : 'Скопировано в облако')
+  } catch {}
+}
+cloud.addEventListener('click', () => cloudPoll(true))
+cloudPoll(); setInterval(cloudPoll, 30000)
+
 const assist = initAssist({ api, h, toast, getCtx: () => ctxNow, confirm2, acceptDrops })
 route(); queuePoll()
