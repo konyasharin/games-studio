@@ -192,9 +192,10 @@ export function initAssist({ api, h, toast, getCtx, confirm2 }) {
   // ---------- chat drawer ----------
   const drawer = h('aside', { class: 'chat', hidden: true })
   document.body.append(drawer)
-  let chatOpen = false, chatTimer = null, chatKey = ''
+  let chatOpen = false
   chatBtn.addEventListener('click', () => { chatOpen = !chatOpen; drawer.hidden = !chatOpen; chatBtn.classList.toggle('on', chatOpen); document.body.classList.toggle('chat-open', chatOpen); if (chatOpen) buildChat() })
   const KIND = { images: 'Генерация картинок', split: 'Разбивка на части', note: 'Вопрос с карточки', request: 'Задача на месте', describe: 'Описание детали' }
+  // the chat is the project's Claude session itself: what was said in the terminal and on the site, live
   function buildChat() {
     const c = getCtx(); drawer.innerHTML = ''
     if (!c?.pid) { drawer.append(h('div', { class: 'empty-note' }, 'Открой проект, чтобы говорить с Claude')); return }
@@ -202,65 +203,65 @@ export function initAssist({ api, h, toast, getCtx, confirm2 }) {
     const head = h('div', { class: 'chat-h' }, h('div', { class: 'grow' }, h('b', {}, 'Claude'), sessLine),
       h('button', { class: 'icon-btn', title: 'Закрыть', onclick: () => chatBtn.click() }, '✕'))
     const log = h('div', { class: 'chat-log' })
+    const pendingBox = h('div', { class: 'chat-pending' })
     const ta = h('textarea', { class: 'chat-in', rows: 1, placeholder: 'Напиши Claude…', title: 'Enter — отправить, Shift+Enter — новая строка' })
     const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(200, ta.scrollHeight) + 'px' }
     ta.addEventListener('input', grow)
     const send = async () => {
       const t = ta.value.trim(); if (!t) return
       ta.value = ''; grow()
-      try { await api('POST', `/api/projects/${c.pid}/chat`, { text: t }); poll(true) } catch { ta.value = t }
+      try { await api('POST', `/api/projects/${c.pid}/chat`, { text: t }); poll() } catch { ta.value = t }
     }
     ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } })
-    drawer.append(head, log, h('div', { class: 'chat-foot' }, ta, h('button', { class: 'btn primary sm', onclick: send }, 'Отправить')))
-    api('GET', `/api/projects/${c.pid}/session`, undefined, { quiet: true }).then(s => {
+    drawer.append(head, log, pendingBox, h('div', { class: 'chat-foot' }, ta, h('button', { class: 'btn primary sm', onclick: send }, 'Отправить')))
+    let last = 0, items = [], sessKey = ''
+    const KINDS = { images: 'генерация картинок', split: 'разбивка на части', note: 'вопрос с карточки', request: 'задача на месте', describe: 'описание детали', tripo: 'настройки Tripo', chat: 'сообщение' }
+    function renderSess(s) {
+      const key = JSON.stringify(s); if (key === sessKey) return; sessKey = key
       sessLine.innerHTML = ''
       if (!s) { sessLine.append('новая сессия начнётся с первого сообщения'); return }
       const cmd = `cd "${s.cwd}" && claude --resume ${s.id}`
-      sessLine.append(`одна сессия · ${s.jobs || 0} задач · `,
+      sessLine.append(s.terminal ? h('span', { class: 'term-on' }, '● открыта в терминале · ') : '',
         h('a', { href: 'javascript:void 0', title: cmd, onclick: () => navigator.clipboard.writeText(cmd).then(() => toast('Команда скопирована: вставь в терминал')) }, 'открыть в терминале'), ' · ',
         h('a', { href: 'javascript:void 0', onclick: async () => { if (await confirm2('Начать новую сессию? Claude забудет прошлый разговор проекта.', 'Новая сессия')) { try { await api('POST', `/api/projects/${c.pid}/session/reset`); toast('Следующее сообщение начнёт новую сессию'); buildChat() } catch {} } } }, 'новая сессия'))
-    }).catch(() => {})
-    chatKey = ''
-    async function poll(force) {
-      clearTimeout(chatTimer)
-      if (!chatOpen || getCtx()?.pid !== c.pid) return
-      let items = []
-      try { items = await api('GET', `/api/projects/${c.pid}/chat`, undefined, { quiet: true }) } catch {}
-      const key = JSON.stringify(items.map(j => [j.id, j.status, (j.events || []).length, (j.thread || []).length]))
-      if (force || key !== chatKey) {
-        chatKey = key
-        const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80
-        log.innerHTML = ''
-        if (!items.length) log.append(h('div', { class: 'chat-empty' }, h('b', {}, 'Это общий разговор проекта.'), h('p', {}, 'Сюда же попадают задачи с досок и метки «Указать»: всё идёт в одну сессию Claude, поэтому он помнит контекст.')))
-        for (const j of items) log.append(...chatItem(j))
-        if (atBottom || force) log.scrollTop = 1e9
+    }
+    // consecutive actions fold into one line; terminal messages carry a small tag
+    function renderItems() {
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80
+      log.innerHTML = ''
+      if (!items.length) log.append(h('div', { class: 'chat-empty' }, h('b', {}, 'Это общий разговор проекта.'), h('p', {}, 'Здесь видно всё из этой сессии Claude: и терминал, и сайт, и задачи с досок.')))
+      let tools = null, prevSrc = null
+      const flushTools = () => { if (tools) { log.append(h('details', { class: 'tools' }, h('summary', {}, `${tools.length} ${tools.length === 1 ? 'действие' : tools.length < 5 ? 'действия' : 'действий'}`), ...tools.slice(-60).map(t => h('div', { class: 'tool' }, h('b', {}, t.name.replace(/^mcp__[^_]+(__)?/, '')), ' ', t.text)))); tools = null } }
+      for (const x of items) {
+        if (x.who === 'tool') { (tools ||= []).push(x); continue }
+        flushTools()
+        const tag = x.src === 'terminal' ? h('span', { class: 'src-tag' }, 'терминал') : null
+        if (x.who === 'user') log.append(h('div', { class: 'bubble user' }, x.text, tag))
+        else if (x.who === 'task') log.append(h('div', { class: 'task-line' }, '◆ ', h('b', {}, KINDS[x.kind] || 'задача'), x.text ? ': ' + x.text : ''))
+        else log.append(h('div', { class: 'bubble claude', html: md(x.text) }))
+        prevSrc = x.src
       }
-      chatTimer = setTimeout(() => poll(), items.some(j => ['queued', 'running'].includes(j.status)) ? 1200 : 4000)
+      flushTools()
+      if (atBottom) log.scrollTop = 1e9
     }
-    poll(true)
-    setTimeout(() => ta.focus(), 30)
-  }
-  function chatItem(j) {
-    const ev = j.events || []
-    const steps = ev.filter(e => e.t === 'tool')
-    const texts = ev.filter(e => e.t === 'text')
-    const working = ['queued', 'running'].includes(j.status)
-    const toolsBox = steps.length ? h('details', { class: 'tools', open: working }, h('summary', {}, `${steps.length} ${steps.length === 1 ? 'действие' : 'действий'}`),
-      ...steps.slice(-40).map(s => h('div', { class: 'tool' }, h('b', {}, s.name), ' ', s.brief))) : null
-    const status = working ? h('div', { class: 'bubble claude typing' }, h('span', { class: 'spinner' }), ' ', j.status === 'queued' ? 'в очереди…' : steps.at(-1) ? `${steps.at(-1).name} ${steps.at(-1).brief.slice(0, 70)}` : 'думает…') : null
-    if (j.kind === 'chat') {
-      const answer = texts.length ? texts.map(t => t.text).join('\n\n') : j.answer
-      return [h('div', { class: 'bubble user' }, j.text),
-        toolsBox, answer ? h('div', { class: 'bubble claude', html: md(answer) }) : null, status,
-        j.status === 'error' ? h('div', { class: 'bubble err' }, (j.log || []).at(-1)?.replace(/^\S+\s/, '') || 'ошибка') : null].filter(Boolean)
+    let timer = null, busy = false
+    async function poll() {
+      clearTimeout(timer)
+      if (!chatOpen || getCtx()?.pid !== c.pid || busy) return
+      busy = true
+      try {
+        const r = await api('GET', `/api/projects/${c.pid}/transcript${last ? '?after=' + last : ''}`, undefined, { quiet: true })
+        renderSess(r.session)
+        if (r.items.length) { items = items.concat(r.items).slice(-600); last = r.last || last; renderItems() }
+        else if (!last && !items.length) renderItems()
+        pendingBox.innerHTML = ''
+        for (const j of r.pending) pendingBox.append(h('div', { class: 'pending ' + j.status }, h('span', { class: 'spinner' }), ' ',
+          j.waitTerminal ? `ждёт, пока закроешь сессию в терминале: ${KINDS[j.kind] || j.kind}` : `${j.status === 'running' ? 'Claude работает' : 'в очереди'}: ${KINDS[j.kind] || j.kind}${j.title ? ' «' + String(j.title).slice(0, 50) + '»' : ''}${j.progress ? ' · ' + j.progress : ''}`))
+        timer = setTimeout(poll, r.pending.length || r.session?.terminal ? 1500 : 4000)
+      } catch { timer = setTimeout(poll, 5000) } finally { busy = false }
     }
-    const title = j.kind === 'request' ? (j.thread?.[0]?.text || '') : j.cardTitle
-    const last = j.kind === 'request' ? [...(j.thread || [])].reverse().find(m => m.who === 'claude')?.text : (j.log || []).at(-1)?.replace(/^\S+\s/, '')
-    const goto = j.board ? `#/p/${j.project}/b/${j.board}` : j.where?.route || null
-    return [h('div', { class: 'task ' + j.status },
-      h('div', { class: 'task-h' }, h('span', { class: 'k' }, KIND[j.kind] || j.kind), h('span', { class: 'tag ' + j.status }, STATUS[j.status] || j.status)),
-      h('div', { class: 'task-t' }, title), last ? h('div', { class: 'task-l', html: md(last.slice(0, 600)) }) : null, toolsBox,
-      goto ? h('a', { class: 'btn sm ghost', href: goto }, 'К месту →') : null)]
+    poll()
+    setTimeout(() => { ta.focus(); log.scrollTop = 1e9 }, 60)
   }
 
   return {

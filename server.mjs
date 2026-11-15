@@ -181,6 +181,68 @@ function toolBrief(name, input = {}) {
   return String(v).replace(/\s+/g, ' ').slice(0, 160)
 }
 
+// ---------- the project's Claude session as one conversation (terminal and site alike) ----------
+// Claude Code writes every session to ~/.claude/projects/<cwd with separators as '-'>/<id>.jsonl. The server
+// reads it once, then only the new bytes, and keeps a compact list: messages, answers and actions.
+const transcripts = new Map() // session id -> { file, pos, buf, items }
+const sessionFile = (cwd, sid) => path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), sid + '.jsonl')
+function transcriptItems(cwd, sid) {
+  let t = transcripts.get(sid)
+  if (!t) { t = { file: sessionFile(cwd, sid), pos: 0, buf: '', items: [], n: 0 }; transcripts.set(sid, t) }
+  let st; try { st = fs.statSync(t.file) } catch { return t.items }
+  if (st.size < t.pos) { t.pos = 0; t.buf = ''; t.items = []; t.n = 0 }
+  if (st.size === t.pos) return t.items
+  const fd = fs.openSync(t.file, 'r')
+  try {
+    const CH = 4 * 1024 * 1024, b = Buffer.alloc(CH)
+    while (t.pos < st.size) {
+      const k = fs.readSync(fd, b, 0, Math.min(CH, st.size - t.pos), t.pos); if (k <= 0) break
+      t.pos += k; t.buf += b.toString('utf8', 0, k)
+      let i
+      while ((i = t.buf.indexOf('\n')) >= 0) {
+        const line = t.buf.slice(0, i); t.buf = t.buf.slice(i + 1)
+        if (!line.startsWith('{"') || (!line.includes('"type":"user"') && !line.includes('"type":"assistant"'))) continue
+        let e; try { e = JSON.parse(line) } catch { continue }
+        if (e.isSidechain || e.isMeta || !e.message) continue
+        const src = e.entrypoint === 'cli' ? 'terminal' : 'site', at = e.timestamp
+        const push = x => { t.items.push({ i: ++t.n, at, src, ...x }); if (t.items.length > 1500) t.items.splice(0, t.items.length - 1500) }
+        const content = typeof e.message.content === 'string' ? [{ type: 'text', text: e.message.content }] : e.message.content || []
+        if (e.type === 'user') {
+          const text = content.filter(c => c.type === 'text').map(c => c.text).join('\n').trim()
+          if (!text || text.startsWith('<') && /^<(command|local-command|system-reminder)/.test(text)) continue
+          if (text.startsWith('You are the background worker of Studio Board')) {
+            const kind = (text.match(/"kind": "(\w+)"/) || [])[1], title = (text.match(/"cardTitle": "([^"]*)"/) || [])[1]
+            const said = (text.match(/"text": "([^"]{1,300})"/) || [])[1]
+            push({ who: 'task', kind, text: title || said || '' })
+          } else push({ who: 'user', text: text.replace(/^\[Studio Board, чат проекта[^\]]*\]\s*/, '').slice(0, 8000) })
+        } else {
+          for (const c of content) {
+            if (c.type === 'text' && c.text?.trim()) push({ who: 'claude', text: c.text.slice(0, 12000) })
+            else if (c.type === 'tool_use') push({ who: 'tool', name: c.name, text: toolBrief(c.name, c.input) })
+          }
+        }
+      }
+    }
+  } finally { fs.closeSync(fd) }
+  return t.items
+}
+
+// is this session open in an interactive terminal right now? (then the site waits instead of writing into it)
+const termCache = new Map()
+function terminalOpen(sid) {
+  const c = termCache.get(sid)
+  if (c && Date.now() - c.at < 4000) return Promise.resolve(c.v)
+  return new Promise(resolve => {
+    const [cmd, args] = process.platform === 'win32'
+      ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "Get-CimInstance Win32_Process -Filter \"name='claude.exe'\" | ForEach-Object { $_.CommandLine }"]]
+      : ['ps', ['-ax', '-o', 'command=']]
+    execFile(cmd, args, { encoding: 'utf8', windowsHide: true, timeout: 8000 }, (err, out) => {
+      const v = !err && String(out).split(/\r?\n/).some(l => l.includes(sid) && !/\s(-p|--print)(\s|$)/.test(l))
+      termCache.set(sid, { at: Date.now(), v }); resolve(v)
+    })
+  })
+}
+
 function killTree(pid) {
   if (!pid) return
   try { process.platform === 'win32' ? execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {}) : process.kill(pid) } catch {}
@@ -198,8 +260,18 @@ async function workerTick() {
   try {
     const s = await settings()
     if (!s.worker) return
-    const next = sortedJobs().find(j => j.status === 'queued')
-    if (next) await runJob(next, s)
+    // a project whose session is open in a terminal waits: two processes must not write one session
+    const sessAll = await readJSON(sessionsFile, {})
+    for (const next of sortedJobs().filter(j => j.status === 'queued')) {
+      const sess = sessAll[next.project]
+      if (sess?.started && await terminalOpen(sess.id)) {
+        if (!next.waitTerminal) await mutateJob(next.id, j => { j.waitTerminal = true; j.log.push(now() + ' ждёт: сессия проекта открыта в терминале') }).catch(() => {})
+        continue
+      }
+      if (next.waitTerminal) next.waitTerminal = false
+      await runJob(next, s)
+      break
+    }
   } catch (e) { console.error(now(), 'worker', e) } finally { ticking = false }
 }
 
@@ -452,6 +524,17 @@ route('POST', '/api/open', async req => {
     return { ok: true }
   }
   throw httpError(400, 'how')
+})
+// the whole conversation of the project's session, terminal and site, read from Claude's own session file
+route('GET', '/api/projects/:pid/transcript', async (req, m, url) => {
+  const p = await project(m.pid)
+  const sess = (await readJSON(sessionsFile, {}))[p.id]
+  const pending = sortedJobs().filter(j => j.project === p.id && active(j)).map(j => ({ id: j.id, kind: j.kind, status: j.status, title: j.kind === 'chat' ? j.text : j.cardTitle, waitTerminal: !!j.waitTerminal, progress: j.progress, last: (j.log || []).at(-1)?.replace(/^\S+\s/, '') || '' }))
+  if (!sess || sess.machine !== os.hostname()) return { session: null, items: [], pending }
+  const items = transcriptItems(path.join(ROOT, p.dir), sess.id)
+  const after = Number(url.searchParams.get('after') || 0)
+  const out = after ? items.filter(x => x.i > after) : items.slice(-400)
+  return { session: { id: sess.id, cwd: path.join(ROOT, p.dir), terminal: await terminalOpen(sess.id) }, items: out, last: items.at(-1)?.i || 0, pending }
 })
 route('POST', '/api/projects/:pid/chat', async (req, m) => {
   const p = await project(m.pid); const { text } = await json(req)

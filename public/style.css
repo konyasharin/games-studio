@@ -403,3 +403,10 @@ textarea.prompt.desc { min-height: 110px; }
 .tripo-tab-t { transform: none; }
 .tripo-panel { right: auto; left: calc(100% + 36px); }
 @keyframes tpIn { from { opacity: 0; transform: translateX(-14px); } }
+.chat-pending { padding: 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.chat-pending:empty { display: none; }
+.pending { font-size: 12.5px; color: #f4cf92; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid rgba(232,163,61,.35); border-radius: 10px; background: rgba(232,163,61,.06); }
+.pending.queued { color: #b9d3fb; border-color: rgba(90,156,240,.35); background: rgba(90,156,240,.06); }
+.src-tag { display: block; margin-top: 4px; font-size: 10.5px; opacity: .75; text-transform: uppercase; letter-spacing: .06em; }
+.task-line { align-self: center; font-size: 12px; color: var(--muted); border: 1px dashed var(--line2); border-radius: 999px; padding: 3px 12px; max-width: 95%; text-align: center; }
+.term-on { color: var(--ok); font-weight: 600; }
