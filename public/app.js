@@ -844,7 +844,7 @@ async function boardPage(view, pid, bid, tok) {
     },
   }
   const isModel = f => /\.(glb|gltf|fbx|obj|blend)$/i.test(f)
-  const openFile = (file, how) => api('POST', '/api/open', { file, how }).then(() => toast(how === 'blender' ? 'Открываю в Blender…' : 'Открываю папку…')).catch(() => {})
+  const openFile = (file, how) => api('POST', '/api/open', { file, how }).then(r => toast(how !== 'blender' ? 'Открываю папку…' : r?.where === 'current' ? 'Добавлено в открытый Blender' : 'Blender не открыт, запускаю новый…')).catch(() => {})
   function fileLine(c, f, slot) {
     return h('div', { class: 'file-line' }, h('span', { title: 'Перетащи в чат, чтобы вставить путь: ' + f.file, draggable: 'true', ondragstart: e => dragFile(e, f.file) }, f.name || f.file.split('/').at(-1)),
       /\.(glb|gltf|fbx|obj)$/i.test(f.file) ? h('button', { class: 'btn sm ghost', title: 'Посмотреть здесь', onclick: () => openViewer(c, f) }, '3D') : null,

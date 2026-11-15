@@ -8,6 +8,7 @@ import { spawn, execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import crypto from 'node:crypto'
 import os from 'node:os'
+import net from 'node:net'
 
 const APP = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(APP, '..') // the Projects folder
@@ -494,6 +495,22 @@ route('POST', '/api/projects/:pid/inbox', async (req, m, url) => {
   return { path: f, file: toRel(f) }
 })
 // open a project file on this computer: reveal it in the file manager, or load it into Blender
+// code into the running Blender through the Blender MCP add-on socket; false when no Blender listens
+async function blenderExec(code) {
+  const port = Number((await readJSON(settingsFile, {})).blenderPort) || 9876
+  return new Promise(resolve => {
+    let buf = '', done = false
+    const end = v => { if (done) return; done = true; sock.destroy(); resolve(v) }
+    const sock = net.createConnection({ host: '127.0.0.1', port }, () => sock.write(JSON.stringify({ type: 'execute_code', params: { code } })))
+    sock.setTimeout(60000, () => end(false))
+    sock.on('error', () => end(false))
+    sock.on('data', d => {
+      buf += d
+      try { const r = JSON.parse(buf); if (r.status !== 'success') console.error(now(), 'blender', r.message); end(r.status === 'success') } catch {}
+    })
+    sock.on('close', () => end(false))
+  })
+}
 const BLENDER_DEFAULT = process.platform === 'win32' ? 'C:/Program Files (x86)/Steam/steamapps/common/Blender/blender.exe'
   : process.platform === 'darwin' ? '/Applications/Blender.app/Contents/MacOS/Blender' : 'blender'
 // the chosen sides of a card copied into one folder named by Tripo's slots, opened with those files selected
@@ -567,23 +584,42 @@ route('POST', '/api/open', async req => {
     if (ext === '.blend') { detached(blender, [abs]); return { ok: true } }
     const imp = { '.fbx': 'bpy.ops.import_scene.fbx', '.glb': 'bpy.ops.import_scene.gltf', '.gltf': 'bpy.ops.import_scene.gltf', '.obj': 'bpy.ops.wm.obj_import' }[ext]
     if (!imp) throw httpError(400, 'Blender не открывает ' + ext)
-    // after the window is up: clear the startup scene's objects, import, frame the model
-    const py = [
-      'import bpy',
-      'def go():',
-      '    for o in list(bpy.data.objects): bpy.data.objects.remove(o)',
-      `    ${imp}(filepath=${JSON.stringify(abs)})`,
+    const view = [
       '    try:',
       '        for w in bpy.context.window_manager.windows:',
       '            for a in w.screen.areas:',
       "                if a.type == 'VIEW_3D':",
       "                    with bpy.context.temp_override(window=w, area=a, region=[r for r in a.regions if r.type == 'WINDOW'][0]):",
-      '                        bpy.ops.view3d.view_all()',
-      '    except Exception as e: print("view_all", e)',
+      '                        bpy.ops.view3d.view_selected()',
+      '    except Exception as e: print("view", e)',
+    ]
+    // into the Blender that is already open (its MCP add-on listens on a socket): a new collection, imported objects selected and framed
+    const into = [
+      'import bpy',
+      'def go():',
+      `    col = bpy.data.collections.new(${JSON.stringify('Studio: ' + path.basename(abs))})`,
+      '    bpy.context.scene.collection.children.link(col)',
+      '    lc = bpy.context.view_layer.layer_collection.children[col.name]',
+      '    bpy.context.view_layer.active_layer_collection = lc',
+      "    if bpy.context.mode != 'OBJECT': bpy.ops.object.mode_set(mode='OBJECT')",
+      '    bpy.ops.object.select_all(action="DESELECT")',
+      `    ${imp}(filepath=${JSON.stringify(abs)})`,
+      ...view,
+      'go()',
+    ].join(String.fromCharCode(10))
+    if (await blenderExec(into)) return { ok: true, where: 'current' }
+    // no Blender open: a new one with an empty scene
+    const py = [
+      'import bpy',
+      'def go():',
+      '    for o in list(bpy.data.objects): bpy.data.objects.remove(o)',
+      `    ${imp}(filepath=${JSON.stringify(abs)})`,
+      '    for o in bpy.data.objects: o.select_set(True)',
+      ...view,
       'bpy.app.timers.register(go, first_interval=1.0)',
     ].join(String.fromCharCode(10))
     detached(blender, ['--python-expr', py])
-    return { ok: true }
+    return { ok: true, where: 'new' }
   }
   throw httpError(400, 'how')
 })
