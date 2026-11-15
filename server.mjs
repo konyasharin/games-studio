@@ -392,18 +392,23 @@ function revealMany(dir, files) {
   if (process.platform === 'win32') {
     const q = s => "'" + s.replace(/'/g, "''") + "'"
     const ps = [
-      `$dir = ${q(path.win32.normalize(dir))}`, `$names = @(${files.map(f => q(path.basename(f))).join(',')})`,
+      `$dir = ${q(path.win32.normalize(dir))}`, `$names = @(${files.map(f => q(path.basename(f))).join(',')})`, `$first = ${q(path.win32.normalize(files[0]))}`,
       '$sh = New-Object -ComObject Shell.Application',
-      'function Find { $sh.Windows() | Where-Object { try { $_.Document.Folder.Self.Path -eq $dir } catch { $false } } | Select-Object -First 1 }',
-      // an already open window of this folder is reused (a second one would come up on top without the selection)
-      '$w = Find', 'if (-not $w) { Start-Process explorer.exe $dir; for ($i = 0; $i -lt 24 -and -not $w; $i++) { Start-Sleep -Milliseconds 250; $w = Find } }',
-      'if ($w) { try { (New-Object -ComObject WScript.Shell).AppActivate($w.LocationName) | Out-Null } catch {} }',
-      // select after the window settles, and again if a refresh dropped the selection
-      'function Sel { $first = $true; foreach ($n in $names) { $it = $w.Document.Folder.ParseName($n); if ($it) { $w.Document.SelectItem($it, $(if ($first) { 29 } else { 1 })); $first = $false } } }',
-      'if ($w) { Start-Sleep -Milliseconds 500; Sel; for ($k = 0; $k -lt 6; $k++) { Start-Sleep -Milliseconds 500; if (@($w.Document.SelectedItems()).Count -lt $names.Count) { Sel } } }',
+      'function Find { @($sh.Windows() | Where-Object { try { $_.Document.Folder.Self.Path -eq $dir } catch { $false } }) | Select-Object -Last 1 }',
+      // an open window of this folder is reused; otherwise explorer opens it at once with the first file selected
+      '$w = Find', 'if (-not $w) { Start-Process explorer.exe -ArgumentList ("/select,`"" + $first + "`""); for ($i = 0; $i -lt 40 -and -not $w; $i++) { Start-Sleep -Milliseconds 100; $w = Find } }',
+      'if (-not $w) { exit }',
+      'function Sel { $one = $true; foreach ($n in $names) { $it = $w.Document.Folder.ParseName($n); if ($it) { $w.Document.SelectItem($it, $(if ($one) { 29 } else { 1 })); $one = $false } } }',
+      'Sel',
+      // Windows keeps background processes from raising windows; a synthetic Alt press lifts that lock for one call
+      'Add-Type -Namespace SB -Name W -MemberDefinition \'[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e); [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);\'',
+      '$h = [IntPtr]$w.HWND', 'if ([SB.W]::IsIconic($h)) { [SB.W]::ShowWindow($h, 9) | Out-Null }',
+      '[SB.W]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [SB.W]::SetForegroundWindow($h) | Out-Null; [SB.W]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)',
+      'for ($k = 0; $k -lt 4; $k++) { Start-Sleep -Milliseconds 300; if (@($w.Document.SelectedItems()).Count -lt $names.Count) { Sel } }',
     ].join('; ')
     // -EncodedCommand (UTF-16LE base64): no quoting trouble with spaces, quotes or Cyrillic in the path
-    const ch = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], { detached: true, stdio: 'ignore', windowsHide: true })
+    // not detached: a detached powershell.exe on Windows exits at once without running the script
+    const ch = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], { stdio: 'ignore', windowsHide: true })
     ch.on('error', () => {}); ch.unref()
   } else if (process.platform === 'darwin') {
     const ch = spawn('open', ['-R', files[0]], { detached: true, stdio: 'ignore' }); ch.on('error', () => {}); ch.unref()
@@ -417,7 +422,7 @@ route('POST', '/api/open', async req => {
   if (!(await fsp.stat(abs).catch(() => null))?.isFile()) throw httpError(404, 'нет файла')
   const detached = (cmd, args) => { const ch = spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: false }); ch.on('error', e => console.error(now(), 'open', e.message)); ch.unref() }
   if (how === 'folder') {
-    if (process.platform === 'win32') detached('explorer.exe', ['/select,' + path.win32.normalize(abs)])
+    if (process.platform === 'win32') revealMany(path.dirname(abs), [abs])
     else if (process.platform === 'darwin') detached('open', ['-R', abs])
     else detached('xdg-open', [path.dirname(abs)])
     return { ok: true }
