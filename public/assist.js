@@ -1,6 +1,6 @@
 // Claude everywhere: point at any place and say what to do (pins with threads), and the project chat drawer.
 // Both talk to the project's one continuing Claude session through the server queue.
-export function initAssist({ api, h, toast, getCtx, confirm2 }) {
+export function initAssist({ api, h, toast, getCtx, confirm2, acceptDrops }) {
   const $ = s => document.querySelector(s)
   const top = $('.top-right')
   const pointBtn = h('button', { class: 'top-btn', title: 'Указать Claude место и сказать, что сделать (Esc — выйти)' }, '◎ Указать')
@@ -110,6 +110,7 @@ export function initAssist({ api, h, toast, getCtx, confirm2 }) {
   }
   function composer(x, y, where) {
     const ta = h('textarea', { class: 'prompt', placeholder: 'Что сделать или исправить здесь? Ctrl+Enter — отправить' })
+    acceptDrops(ta, () => getCtx()?.pid)
     const send = async () => {
       if (!ta.value.trim()) return
       try { await api('POST', `/api/projects/${getCtx().pid}/requests`, { text: ta.value, where }); pop.remove(); toast('Claude получил задачу'); pins.refresh() } catch {}
@@ -126,6 +127,7 @@ export function initAssist({ api, h, toast, getCtx, confirm2 }) {
     const msgs = (j.thread || []).map(m => h('div', { class: 'msg ' + m.who }, h('div', { class: 'who' }, m.who === 'user' ? 'Ты' : 'Claude'), h('div', { class: 'body', html: m.who === 'user' ? esc(m.text).replace(/\n/g, '<br>') : md(m.text) })))
     const live = ['queued', 'running'].includes(j.status) ? h('div', { class: 'msg claude' }, h('div', { class: 'who' }, 'Claude'), h('div', { class: 'body typing' }, h('span', { class: 'spinner' }), ' ', j.status === 'queued' ? 'в очереди…' : (j.events || []).filter(e => e.t === 'tool').at(-1)?.brief ? 'работает: ' + (j.events || []).filter(e => e.t === 'tool').at(-1).name + ' ' + (j.events || []).filter(e => e.t === 'tool').at(-1).brief.slice(0, 60) : 'думает…')) : null
     const ta = h('textarea', { class: 'prompt', placeholder: 'Уточнить или ответить… Ctrl+Enter' })
+    acceptDrops(ta, () => getCtx()?.pid)
     const reply = async () => { if (!ta.value.trim()) return; try { await api('POST', `/api/jobs/${j.id}/reply`, { text: ta.value }); ta.value = ''; pins.refresh(true) } catch {} }
     ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) reply() })
     return h('div', { class: 'thread' }, h('div', { class: 'pop-where' }, '◎ ' + describe(j.where || {}), h('span', { class: 'tag ' + j.status }, STATUS[j.status] || j.status)),
@@ -213,6 +215,7 @@ export function initAssist({ api, h, toast, getCtx, confirm2 }) {
       try { await api('POST', `/api/projects/${c.pid}/chat`, { text: t }); poll() } catch { ta.value = t }
     }
     ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } })
+    acceptDrops(ta, () => getCtx()?.pid)
     drawer.append(head, log, pendingBox, h('div', { class: 'chat-foot' }, ta, h('button', { class: 'btn primary sm', onclick: send }, 'Отправить')))
     let last = 0, items = [], sessKey = ''
     const KINDS = { images: 'генерация картинок', split: 'разбивка на части', note: 'вопрос с карточки', request: 'задача на месте', describe: 'описание детали', tripo: 'настройки Tripo', chat: 'сообщение' }

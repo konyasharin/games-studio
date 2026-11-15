@@ -431,7 +431,16 @@ const routes = []
 const route = (method, pattern, fn, opts = {}) =>
   routes.push({ method, re: new RegExp('^' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), fn, ...opts })
 
-route('GET', '/api/settings', async () => settings())
+route('GET', '/api/settings', async () => ({ ...(await settings()), root: ROOT }))
+// a file dropped into the chat: kept in the project's inbox, its full path goes into the message
+route('POST', '/api/projects/:pid/inbox', async (req, m, url) => {
+  const p = await project(m.pid)
+  const name = safeName(url.searchParams.get('name') || 'file.bin')
+  const dir = path.join(projDir(p), 'inbox'); await fsp.mkdir(dir, { recursive: true })
+  const f = path.join(dir, new Date().toISOString().slice(0, 10) + '-' + Date.now().toString(36).slice(-4) + '-' + name)
+  await fsp.writeFile(f, await readBody(req))
+  return { path: f, file: toRel(f) }
+})
 // open a project file on this computer: reveal it in the file manager, or load it into Blender
 const BLENDER_DEFAULT = process.platform === 'win32' ? 'C:/Program Files (x86)/Steam/steamapps/common/Blender/blender.exe'
   : process.platform === 'darwin' ? '/Applications/Blender.app/Contents/MacOS/Blender' : 'blender'

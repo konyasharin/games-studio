@@ -15,6 +15,35 @@ const h = (tag, attrs = {}, ...kids) => {
   return el
 }
 const fileUrl = rel => '/files/' + rel.split('/').map(encodeURIComponent).join('/')
+
+// drag a picture or model from the board into a text field: its full path is inserted (like a terminal does)
+let ROOT_DIR = null
+fetch('/api/settings').then(r => r.json()).then(s => { ROOT_DIR = s.root }).catch(() => {})
+const fullPath = rel => ROOT_DIR ? (ROOT_DIR + '/' + rel).replace(/\//g, ROOT_DIR.includes('\\') ? '\\' : '/') : rel
+const dragFile = (e, rel) => { e.stopPropagation(); e.dataTransfer.setData('text/x-studio-file', rel); e.dataTransfer.setData('text/plain', fullPath(rel)); e.dataTransfer.effectAllowed = 'copy' }
+function insertAtCursor(ta, text) {
+  const s = ta.selectionStart ?? ta.value.length, e = ta.selectionEnd ?? s
+  const pre = ta.value.slice(0, s), sep = pre && !/\s$/.test(pre) ? ' ' : ''
+  ta.value = pre + sep + text + ' ' + ta.value.slice(e)
+  const pos = (pre + sep + text + ' ').length; ta.setSelectionRange(pos, pos); ta.focus()
+  ta.dispatchEvent(new Event('input', { bubbles: true })); ta.dispatchEvent(new Event('change', { bubbles: true }))
+}
+// files from the computer are copied into the project's inbox first: a browser never tells a dropped file's path
+function acceptDrops(ta, getPid) {
+  ta.addEventListener('dragover', e => { const t = [...e.dataTransfer.types]; if (t.includes('Files') || t.includes('text/x-studio-file')) { e.preventDefault(); e.stopPropagation(); ta.classList.add('drop-in') } })
+  ta.addEventListener('dragleave', () => ta.classList.remove('drop-in'))
+  ta.addEventListener('drop', async e => {
+    const rel = e.dataTransfer.getData('text/x-studio-file'), files = [...e.dataTransfer.files]
+    if (!rel && !files.length) return
+    e.preventDefault(); e.stopPropagation(); ta.classList.remove('drop-in')
+    if (rel) return insertAtCursor(ta, '"' + fullPath(rel) + '"')
+    const pid = getPid?.()
+    if (!pid) return toast('Открой проект, чтобы прикреплять файлы', true)
+    for (const f of files) {
+      try { const r = await api('POST', `/api/projects/${pid}/inbox?name=${encodeURIComponent(f.name)}`, f, { raw: true }); insertAtCursor(ta, '"' + r.path + '"') } catch {}
+    }
+  })
+}
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 
 // ---------- api with retries; never throws into the UI without a toast ----------
@@ -571,7 +600,7 @@ async function boardPage(view, pid, bid, tok) {
     const vars = (c.variants || []).filter(v => !v.hidden)
     const picks = picksOf(c)
     const main = picks.front
-    b.append(main ? h('div', { class: 'hero', style: { backgroundImage: `url("${fileUrl(main)}")` }, onclick: () => lightbox(c, { file: main }, pickedList(c)) }, h('span', { class: 'hero-side' }, sideIcon(viewOf(vars.find(v => v.file === main) || { view: 'front' }))))
+    b.append(main ? h('div', { class: 'hero', draggable: 'true', ondragstart: e => dragFile(e, main), style: { backgroundImage: `url("${fileUrl(main)}")` }, onclick: () => lightbox(c, { file: main }, pickedList(c)) }, h('span', { class: 'hero-side' }, sideIcon(viewOf(vars.find(v => v.file === main) || { view: 'front' }))))
       : h('div', { class: 'hero empty' }, vars.length ? 'Выбери главный вид (спереди) ниже' : 'Нет картинок. Сгенерируй или перетащи файл сюда.'))
     // the other sides: small, under the main view
     const others = SIDES.slice(1)
@@ -592,7 +621,7 @@ async function boardPage(view, pid, bid, tok) {
       const list = (filter ? vars.filter(v => viewOf(v) === filter) : vars).slice(-8)
       b.append(h('div', { class: 'strip' }, ...list.slice().reverse().map(v => {
         const side = viewOf(v), isPick = picks[side] === v.file
-        return h('div', { class: 'thumb-v' + (isPick ? ' ch' : ''), title: (SIDE[side].name + (v.prompt ? ': ' + v.prompt : '')).slice(0, 300), style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v, list.slice().reverse()) },
+        return h('div', { class: 'thumb-v' + (isPick ? ' ch' : ''), draggable: 'true', ondragstart: e => dragFile(e, v.file), title: (SIDE[side].name + (v.prompt ? ': ' + v.prompt : '')).slice(0, 300), style: { backgroundImage: `url("${fileUrl(v.file)}")` }, onclick: () => lightbox(c, v, list.slice().reverse()) },
           sideIcon(side),
           h('button', { class: 'x', title: 'Удалить вариант (Ctrl+Z вернёт)', onclick: e => {
             e.stopPropagation()
@@ -617,6 +646,7 @@ async function boardPage(view, pid, bid, tok) {
     }
     const ta = h('textarea', { class: 'prompt desc', placeholder: 'Описание детали со всех сторон: основа промптов. Нажми «Описать со всех сторон», и Claude напишет его по референсам; потом поправь.' }); ta.value = c.prompt || ''
     ta.addEventListener('change', () => patch(c, { prompt: ta.value }))
+    acceptDrops(ta, () => pid)
     b.append(h('div', { class: 'desc-h' }, h('span', {}, 'Описание детали'),
       c.promptPrev ? h('button', { class: 'btn sm ghost', title: 'Вернуть текст, который был до последнего описания Claude', onclick: () => patch(c, { prompt: c.promptPrev, promptPrev: c.prompt || '' }) }, '↶ прошлое') : null,
       h('button', { class: 'btn sm', disabled: busy(c), title: 'Claude посмотрит на референсы и опишет деталь спереди, сзади и с боков; промпты под каждую сторону он соберёт из этого описания при генерации', onclick: () => generate(c, { kind: 'describe' }) }, '✎ Описать со всех сторон')), ta)
@@ -772,7 +802,7 @@ async function boardPage(view, pid, bid, tok) {
   const isModel = f => /\.(glb|gltf|fbx|obj|blend)$/i.test(f)
   const openFile = (file, how) => api('POST', '/api/open', { file, how }).then(() => toast(how === 'blender' ? 'Открываю в Blender…' : 'Открываю папку…')).catch(() => {})
   function fileLine(c, f, slot) {
-    return h('div', { class: 'file-line' }, h('span', { title: f.file }, f.name || f.file.split('/').at(-1)),
+    return h('div', { class: 'file-line' }, h('span', { title: 'Перетащи в чат, чтобы вставить путь: ' + f.file, draggable: 'true', ondragstart: e => dragFile(e, f.file) }, f.name || f.file.split('/').at(-1)),
       /\.(glb|gltf|fbx|obj)$/i.test(f.file) ? h('button', { class: 'btn sm ghost', title: 'Посмотреть здесь', onclick: () => openViewer(c, f) }, '3D') : null,
       isModel(f.file) ? h('button', { class: 'btn sm ghost', title: 'Открыть в Blender', onclick: () => openFile(f.file, 'blender') }, 'B') : null,
       h('button', { class: 'btn sm ghost', title: 'Показать в папке (например, чтобы перетащить в Tripo)', onclick: () => openFile(f.file, 'folder') }, '📂'),
@@ -850,5 +880,5 @@ function renderQueue(jobs) {
 }
 $('#queueBtn').addEventListener('click', async () => { const p = $('#queuePanel'); p.hidden = !p.hidden; if (!p.hidden) renderQueue(await api('GET', '/api/jobs', undefined, { quiet: true }).catch(() => [])) })
 
-const assist = initAssist({ api, h, toast, getCtx: () => ctxNow, confirm2 })
+const assist = initAssist({ api, h, toast, getCtx: () => ctxNow, confirm2, acceptDrops })
 route(); queuePoll()
