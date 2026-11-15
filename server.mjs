@@ -271,7 +271,8 @@ function follow(job, { sid, started, pid, offset, owned }) {
   const t0 = Date.parse(job.started || now())
   const iv = setInterval(() => {
     read()
-    if (job.status !== 'running') { if (alive(pid)) killTree(pid); return finish('cancelled', 'остановлено') }
+    // only a cancel stops the run; a job Claude already completed via /complete keeps its process (a batch goes on)
+    if (job.status === 'cancelled') { if (alive(pid)) killTree(pid); return finish('cancelled', 'остановлено') }
     if (Date.now() - t0 > 45 * 60 * 1000) { killTree(pid); return finish('error', 'превышено время (45 мин)') }
     if (!owned && !alive(pid)) done()
   }, 700)
