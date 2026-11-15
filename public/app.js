@@ -385,8 +385,9 @@ async function boardPage(view, pid, bid, tok) {
   let dragging = null, linking = null, editing = new Set()
   const jobOf = cid => B.jobs.filter(j => j.card === cid).sort((a, b) => a.created.localeCompare(b.created)).at(-1)
   const filters = new Map() // per card: which side's variants the strip shows
+  const tripoOpen = new Set()
   const trashOpen = new Set()
-  const sig = c => JSON.stringify([c, jobOf(c.id), filters.get(c.id), trashOpen.has(c.id)])
+  const sig = c => JSON.stringify([c, jobOf(c.id), filters.get(c.id), trashOpen.has(c.id), tripoOpen.has(c.id)])
 
   function render() {
     const seen = new Set()
@@ -497,6 +498,7 @@ async function boardPage(view, pid, bid, tok) {
     const body = h('div', { class: 'card-b' })
     try { (BODY[c.type] || BODY.note)(c, body) } catch (e) { console.error(e); body.append(h('div', { class: 'status error' }, 'Карточка не отрисовалась: ' + e.message)) }
     n.append(head, body, port)
+    if (c.type === 'ref' || c.type === 'part') tripoTab(c, n)
     // drop files anywhere on the card
     n.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); n.classList.add('drop') } })
     n.addEventListener('dragleave', e => { if (!n.contains(e.relatedTarget)) n.classList.remove('drop') })
@@ -633,6 +635,67 @@ async function boardPage(view, pid, bid, tok) {
       onclick: () => { patch(c, { prompt: ta.value }); generate(c, { prompt: ta.value, count: Number(count.value), sides: chosenSides }) } }, vars.length ? `Ещё ${total}` : `Сгенерировать ${total}`)
     b.append(h('div', { class: 'row' }, sidePick, count, h('span', { class: 'grow' }), freeze, gen))
     const st = statusLine(c); if (st) b.append(st)
+  }
+
+  // ---------- Tripo panel: recommended generation settings, slides out of the card's side ----------
+  const TRIPO_MODELS = { p2: { name: 'P2 Smart Mesh', credits: 100, quads: true, note: 'для частей, которые гнутся (тело, одежда, голова)' },
+    p1: { name: 'P1', credits: 35, quads: false, note: 'жёсткие части, треугольники; число полигонов ×2 от квадов' },
+    h3: { name: 'H3.1 HD', credits: 25, quads: false, note: 'максимум детали (волосы, сложные формы) + ретопология в Tripo' } }
+  function tripoDefaults(c) {
+    const t = `${c.title} ${c.route || ''} ${c.note || ''}`.toLowerCase()
+    const num = (c.route || '').match(/(\d[\d\s]{2,})/)
+    let model = /p1\b/.test(t) ? 'p1' : /h3|hd/.test(t) ? 'h3' : /p2|smart/.test(t) ? 'p2' : null
+    let poly = num ? Number(num[1].replace(/\s/g, '')) : null
+    const kindOf = x => /волос|hair/.test(x) ? 'hair' : /голов|лицо|head/.test(x) ? 'head' : /ботин|сапог|boot/.test(x) ? 'boot'
+      : /кист|перчат|hand|glove/.test(x) ? 'hand' : /аксесс|ошейник|щиток|разъ|наплеч/.test(x) ? 'props' : /кител|куртк|штан|брюк|тело|костюм|body/.test(x) ? 'cloth' : null
+    const kind = kindOf(String(c.title).toLowerCase()) || kindOf(t) || 'other'
+    const REC = { cloth: ['p2', 4000], head: ['p2', 2500], hand: ['p2', 2500], hair: ['h3', 3000], boot: ['p1', 6000], props: ['h3', 3000], other: ['p2', 4000] }
+    model ||= REC[kind][0]; poly ||= REC[kind][1]
+    const spread = [0.75, 1, 1.25, 1.5].map(k => Math.round(poly * k / 100) * 100)
+    return { model, poly, variants: model === 'p2' ? spread : [poly], quads: TRIPO_MODELS[model].quads, texture: false,
+      smartUV: model === 'p2' && ['cloth', 'head'].includes(kind), retopo: model === 'h3' ? poly : null, multiview: true, kind }
+  }
+  function tripoTab(c, n) {
+    const open = tripoOpen.has(c.id)
+    const tab = h('button', { class: 'tripo-tab' + (open ? ' on' : ''), title: 'Настройки Tripo для этой детали', onclick: e => { e.stopPropagation(); open ? tripoOpen.delete(c.id) : tripoOpen.add(c.id); render() } },
+      h('span', { class: 'tripo-dot' }), h('span', { class: 'tripo-tab-t' }, 'TRIPO'))
+    n.append(tab)
+    if (!open) return
+    const T = { ...tripoDefaults(c), ...(c.tripo || {}) }
+    const save = p => patch(c, { tripo: { ...T, ...p } })
+    const M = TRIPO_MODELS[T.model] || TRIPO_MODELS.p2
+    const credits = M.credits + (T.smartUV ? 20 : 0)
+    const sw = (on, label, key, hint) => h('label', { class: 'tp-row', title: hint || '' }, h('span', {}, label), h('button', { class: 'tp-switch' + (on ? ' on' : ''), onclick: () => save({ [key]: !on }) }, h('i')))
+    const picks = picksOf(c)
+    const views = [['front', 'Front'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right']]
+    const polyIn = h('input', { class: 'tp-num', type: 'number', min: 500, max: 25000, step: 100, value: T.poly })
+    polyIn.addEventListener('change', () => { const v = Math.max(500, Math.min(25000, Number(polyIn.value) || T.poly)); save({ poly: v, variants: T.model === 'p2' ? [0.75, 1, 1.25, 1.5].map(k => Math.round(v * k / 100) * 100) : [v], retopo: T.model === 'h3' ? v : null }) })
+    const summary = () => [`Tripo: ${M.name}`, T.model === 'p2' ? `Quad: ${T.quads ? 'on' : 'off'}` : 'Triangles', `Polycount: ${T.variants.join(' / ')}${T.variants.length > 1 ? ' (Use Same Polygon Count: off, 4 варианта)' : ''}`,
+      T.retopo ? `Ретопология: ~${T.retopo}` : null, `Texture: ${T.texture ? 'on' : 'off'}`, `Smart UV: ${T.smartUV ? 'on' : 'off'}`, `Картинки: ${views.filter(([k]) => picks[k]).map(v => v[1]).join(', ') || 'нет'}`].filter(Boolean).join('\n')
+    const panel = h('div', { class: 'tripo-panel', onpointerdown: e => e.stopPropagation(), onwheel: e => e.stopPropagation() },
+      h('div', { class: 'tp-head' }, h('span', { class: 'tp-logo' }, 'tripo'), h('span', { class: 'tp-sub' }, 'рекомендации'), h('button', { class: 'tp-x', onclick: () => { tripoOpen.delete(c.id); render() } }, '✕')),
+      h('div', { class: 'tp-sec' }, h('div', { class: 'tp-k' }, 'Model'),
+        h('div', { class: 'tp-seg' }, ...Object.entries(TRIPO_MODELS).map(([k, m]) => h('button', { class: T.model === k ? 'on' : '', onclick: () => save({ model: k, quads: m.quads, variants: k === 'p2' ? [0.75, 1, 1.25, 1.5].map(x => Math.round(T.poly * x / 100) * 100) : [T.poly], retopo: k === 'h3' ? T.poly : null, smartUV: k === 'p2' ? T.smartUV : false }) }, m.name))),
+        h('div', { class: 'tp-hint' }, M.note)),
+      h('div', { class: 'tp-sec' }, h('div', { class: 'tp-k' }, T.model === 'p1' ? 'Polycount (треугольники)' : 'Polycount'),
+        h('div', { class: 'tp-row' }, polyIn, h('span', { class: 'tp-hint' }, T.model === 'p2' ? '4 варианта за один запуск:' : T.model === 'h3' ? 'после ретопологии' : '')),
+        T.variants.length > 1 ? h('div', { class: 'tp-chips' }, ...T.variants.map(v => h('span', { class: 'tp-chip' + (v === T.poly ? ' on' : '') }, v.toLocaleString('ru')))) : null),
+      h('div', { class: 'tp-sec' }, h('div', { class: 'tp-k' }, 'Settings'),
+        T.model === 'p2' ? sw(T.quads, 'Quad topology', 'quads') : null,
+        sw(T.texture, 'Texture', 'texture', 'Текстуру делаем потом в Modddif или Tripo-текстурах, при генерации сетки выключено'),
+        sw(T.smartUV, 'Smart UV (+20)', 'smartUV', 'Только для тела и головы; жёсткие детали Claude развернёт в Blender бесплатно')),
+      h('div', { class: 'tp-sec' }, h('div', { class: 'tp-k' }, 'Multi-view images'),
+        h('div', { class: 'tp-views' }, ...views.map(([k, label]) => {
+          const f = picks[k]
+          return h('div', { class: 'tp-view' + (f ? '' : ' empty'), style: f ? { backgroundImage: `url("${fileUrl(f)}")` } : {}, title: f ? 'Показать файл в папке, чтобы перетащить в Tripo' : 'Сторона не выбрана', onclick: () => f && openFile(f, 'folder') },
+            h('span', {}, label))
+        })),
+        h('div', { class: 'tp-hint' }, 'Клик по картинке откроет её в папке: перетащи в слот Tripo с тем же названием.')),
+      h('div', { class: 'tp-foot' }, h('span', { class: 'tp-cost' }, `≈ ${credits} кредитов`),
+        h('button', { class: 'tp-ghost', title: 'Скопировать настройки текстом', onclick: () => navigator.clipboard.writeText(summary()).then(() => toast('Настройки скопированы')) }, 'Копировать'),
+        h('button', { class: 'tp-btn', disabled: busy(c), title: 'Claude посмотрит на деталь и правила пайплайна и подберёт настройки', onclick: () => generate(c, { kind: 'tripo' }) }, 'Claude, подбери')),
+      c.tripo?.why ? h('div', { class: 'tp-why' }, c.tripo.why) : null)
+    n.append(panel)
   }
 
   let confirming = false

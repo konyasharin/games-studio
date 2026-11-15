@@ -724,7 +724,7 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/generate', async (req, 
   up(c.id)
   inputs.push(...(c.inputs || []))
   if ([...jobs.values()].some(j => j.card === c.id && active(j))) throw httpError(409, 'уже в очереди')
-  const kind = ['images', 'split', 'note', 'describe'].includes(opts.kind) ? opts.kind : c.type === 'split' ? 'split' : 'images'
+  const kind = ['images', 'split', 'note', 'describe', 'tripo'].includes(opts.kind) ? opts.kind : c.type === 'split' ? 'split' : 'images'
   const SIDES = ['front', 'back', 'left', 'right']
   const sides = (Array.isArray(opts.sides) ? opts.sides : c.sides || ['front']).filter(x => SIDES.includes(x))
   if (kind === 'images' && !sides.length) throw httpError(400, 'выбери хотя бы одну сторону')
@@ -790,6 +790,7 @@ route('POST', '/api/jobs/:jid/complete', async (req, m, url) => {
       const c = findCard(b, j.card)
       if (j.kind === 'describe' && typeof body.cardPatch.prompt === 'string' && c.prompt && c.prompt !== body.cardPatch.prompt) c.promptPrev = c.prompt
       for (const k of ['prompt', 'proposal', 'answer', 'doubts']) if (typeof body.cardPatch[k] === 'string') c[k] = body.cardPatch[k]
+      if (body.cardPatch.tripo && typeof body.cardPatch.tripo === 'object') c.tripo = { ...(c.tripo || {}), ...body.cardPatch.tripo }
       if (Array.isArray(body.cardPatch.parts)) {
         const keep = (c.parts || []).filter(x => x.card)
         c.parts = keep.concat(body.cardPatch.parts.map(x => ({ pid: id(), name: String(x.name || ''), includes: String(x.includes || ''), route: String(x.route || ''), prompt: String(x.prompt || '') })))

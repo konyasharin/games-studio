@@ -26,6 +26,13 @@ Rules that always hold:
 - Finish with `POST {api}/api/jobs/{id}/complete?token=<token>` and JSON `{"status": "done"|"error", "message": "...",
   "cardPatch": {...optional fields to set on the card...}}`. Always call it, also on failure.
 
+## kind = "tripo"
+Pick the Tripo Studio settings for this card's object, following `~/.claude/rules/3d-characters.md` (routes,
+polycount guide, credit-saving rules) and what the references show. Complete with `cardPatch: {"tripo": {"model":
+"p2"|"p1"|"h3", "poly": <number>, "variants": [4 numbers for p2 (Use Same Polygon Count off) or one], "quads":
+bool, "texture": false, "smartUV": bool, "retopo": <number or null>, "why": "<2-3 sentences in Russian>"}}`.
+No generation in this kind.
+
 ## kind = "describe"
 Write the card's master description: one text that describes the object fully from all sides, the base the author
 edits and every per-side image prompt is built from. Look at every file in `inputs` (Read them: the parent's
