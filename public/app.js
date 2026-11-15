@@ -844,11 +844,13 @@ async function boardPage(view, pid, bid, tok) {
     },
   }
   const isModel = f => /\.(glb|gltf|fbx|obj|blend)$/i.test(f)
-  const openFile = (file, how) => api('POST', '/api/open', { file, how }).then(r => toast(how !== 'blender' ? 'Открываю папку…' : r?.where === 'current' ? 'Добавлено в открытый Blender' : 'Blender не открыт, запускаю новый…')).catch(() => {})
+  const cardFiles = c => [...(c.mesh || []), ...(c.textured || [])].map(x => x.file)
+  const BL_MSG = { already: r => 'Этот файл уже открыт в Blender: ' + r.blend, blend: r => 'Открываю в Blender: ' + r.blend, current: () => 'Исходного .blend нет, модель добавлена в открытый Blender', new: () => 'Исходного .blend нет, открываю модель в новом Blender…' }
+  const openFile = (file, how, related, blend) => api('POST', '/api/open', { file, how, related, blend }).then(r => toast(how !== 'blender' ? 'Открываю папку…' : (BL_MSG[r?.where] || BL_MSG.blend)(r))).catch(() => {})
   function fileLine(c, f, slot) {
     return h('div', { class: 'file-line' }, h('span', { title: 'Перетащи в чат, чтобы вставить путь: ' + f.file, draggable: 'true', ondragstart: e => dragFile(e, f.file) }, f.name || f.file.split('/').at(-1)),
       /\.(glb|gltf|fbx|obj)$/i.test(f.file) ? h('button', { class: 'btn sm ghost', title: 'Посмотреть здесь', onclick: () => openViewer(c, f) }, '3D') : null,
-      isModel(f.file) ? h('button', { class: 'btn sm ghost', title: 'Открыть в Blender', onclick: () => openFile(f.file, 'blender') }, 'B') : null,
+      isModel(f.file) ? h('button', { class: 'btn sm ghost', title: 'Открыть в Blender', onclick: () => openFile(f.file, 'blender', cardFiles(c), c.blend) }, 'B') : null,
       h('button', { class: 'btn sm ghost', title: 'Показать в папке (например, чтобы перетащить в Tripo)', onclick: () => openFile(f.file, 'folder') }, '📂'),
       h('a', { class: 'btn sm ghost', href: fileUrl(f.file), download: '', title: 'Скачать' }, '↓'))
   }
@@ -867,7 +869,7 @@ async function boardPage(view, pid, bid, tok) {
         .then(() => refresh()).catch(e => console.warn('thumb', key, e))
     }
     const textured = c.type === 'model' && (c.textured || []).length > 0
-    return h('div', { class: 'model-thumb', style: c.thumb ? { backgroundImage: `url("${fileUrl(c.thumb)}")` } : {}, onclick: () => files.length ? openViewer(c, files.length > 1 ? files : f) : openFile(f.file, 'blender') },
+    return h('div', { class: 'model-thumb', style: c.thumb ? { backgroundImage: `url("${fileUrl(c.thumb)}")` } : {}, onclick: () => files.length ? openViewer(c, files.length > 1 ? files : f) : openFile(f.file, 'blender', cardFiles(c), c.blend) },
       c.thumb ? '' : files.length ? 'Открыть 3D' : 'Открыть в Blender',
       c.type === 'model' ? h('span', { class: 'thumb-tag' + (textured ? ' tex' : '') }, textured ? 'с текстурой' : 'сетка') : null)
   }
@@ -876,7 +878,7 @@ async function boardPage(view, pid, bid, tok) {
     const list = [].concat(f)
     showModel({ url: list.map(x => fileUrl(x.file)), name: list.map(x => x.name || x.file.split('/').pop()).join(' + '), openModal, closeModal, toast,
       hasThumb: !!c.thumb,
-      onOpen: how => openFile(list[0].file, how),
+      onOpen: how => openFile(list[0].file, how, cardFiles(c), c.blend),
       onThumb: async blob => { try { await api('POST', `${base}/cards/${c.id}/files?slot=thumb&name=thumb.png&of=${encodeURIComponent(list.map(x => x.file).join('|'))}`, blob, { raw: true, quiet: true }); refresh() } catch {} } })
   }
 

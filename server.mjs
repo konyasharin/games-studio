@@ -495,21 +495,45 @@ route('POST', '/api/projects/:pid/inbox', async (req, m, url) => {
   return { path: f, file: toRel(f) }
 })
 // open a project file on this computer: reveal it in the file manager, or load it into Blender
-// code into the running Blender through the Blender MCP add-on socket; false when no Blender listens
+// code into the running Blender through the Blender MCP add-on socket: its printed output, or null when no Blender listens
 async function blenderExec(code) {
   const port = Number((await readJSON(settingsFile, {})).blenderPort) || 9876
   return new Promise(resolve => {
     let buf = '', done = false
     const end = v => { if (done) return; done = true; sock.destroy(); resolve(v) }
     const sock = net.createConnection({ host: '127.0.0.1', port }, () => sock.write(JSON.stringify({ type: 'execute_code', params: { code } })))
-    sock.setTimeout(60000, () => end(false))
-    sock.on('error', () => end(false))
+    sock.setTimeout(60000, () => end(null))
+    sock.on('error', () => end(null))
     sock.on('data', d => {
       buf += d
-      try { const r = JSON.parse(buf); if (r.status !== 'success') console.error(now(), 'blender', r.message); end(r.status === 'success') } catch {}
+      try { const r = JSON.parse(buf); if (r.status !== 'success') console.error(now(), 'blender', r.message); end(r.status === 'success' ? String(r.result?.result ?? '') : null) } catch {}
     })
-    sock.on('close', () => end(false))
+    sock.on('close', () => end(null))
   })
+}
+async function sourceBlend(files) {
+  for (const f of files) {
+    const b = f.slice(0, f.length - path.extname(f).length) + '.blend'
+    if (b !== f && fs.existsSync(b)) return b
+  }
+  // the same name elsewhere in the game folder, also without a version suffix and singular/plural: jacket-v3 → jacket, glove → gloves
+  const abs = files[0], base = path.basename(abs, path.extname(abs)).toLowerCase(), bare = base.replace(/[-_ ]v\d+$/, '')
+  const names = [...new Set([base, bare, bare.endsWith('s') ? bare.slice(0, -1) : bare + 's'])].map(n => n + '.blend')
+  const top = path.join(ROOT, path.relative(ROOT, abs).split(path.sep)[0])
+  const found = []
+  const walk = async (dir, depth) => {
+    if (depth > 8) return
+    let entries; try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (e.isDirectory()) { if (!/^[._]|^(studio|node_modules)$/.test(e.name)) await walk(path.join(dir, e.name), depth + 1) }
+      else if (names.includes(e.name.toLowerCase())) found.push(path.join(dir, e.name))
+    }
+  }
+  await walk(top, 0)
+  const dist = f => path.relative(path.dirname(abs), path.dirname(f)).split(path.sep).filter(Boolean).length
+  const scored = await Promise.all(found.map(async f => ({ f, n: names.indexOf(path.basename(f).toLowerCase()), d: dist(f), t: (await fsp.stat(f)).mtimeMs })))
+  scored.sort((a, b) => a.n - b.n || a.d - b.d || b.t - a.t)
+  return scored[0]?.f || null
 }
 const BLENDER_DEFAULT = process.platform === 'win32' ? 'C:/Program Files (x86)/Steam/steamapps/common/Blender/blender.exe'
   : process.platform === 'darwin' ? '/Applications/Blender.app/Contents/MacOS/Blender' : 'blender'
@@ -567,7 +591,8 @@ function revealMany(dir, files) {
 }
 
 route('POST', '/api/open', async req => {
-  const { file, how = 'folder' } = await json(req)
+  const body = await json(req)
+  const { file, how = 'folder' } = body
   const abs = path.resolve(ROOT, String(file || ''))
   if (!inside(ROOT, abs)) throw httpError(403, 'outside')
   if (!(await fsp.stat(abs).catch(() => null))?.isFile()) throw httpError(404, 'нет файла')
@@ -581,7 +606,14 @@ route('POST', '/api/open', async req => {
   if (how === 'blender') {
     const blender = (await readJSON(settingsFile, {})).blender || BLENDER_DEFAULT
     const ext = path.extname(abs).toLowerCase()
-    if (ext === '.blend') { detached(blender, [abs]); return { ok: true } }
+    // a model exported from a .blend opens as that .blend: same name next to it, else the nearest one in the project
+    const own = body.blend ? path.resolve(ROOT, String(body.blend)) : null
+    const blend = ext === '.blend' ? abs : own && inside(ROOT, own) && fs.existsSync(own) ? own : await sourceBlend([abs, ...[].concat(body.related || []).map(f => path.resolve(ROOT, String(f))).filter(f => inside(ROOT, f))])
+    if (blend) {
+      const cur = await blenderExec('import bpy; print(bpy.data.filepath)')
+      if (cur !== null && path.resolve(cur.trim() || '.') === blend) return { ok: true, where: 'already', blend: toRel(blend) }
+      detached(blender, [blend]); return { ok: true, where: 'blend', blend: toRel(blend) }
+    }
     const imp = { '.fbx': 'bpy.ops.import_scene.fbx', '.glb': 'bpy.ops.import_scene.gltf', '.gltf': 'bpy.ops.import_scene.gltf', '.obj': 'bpy.ops.wm.obj_import' }[ext]
     if (!imp) throw httpError(400, 'Blender не открывает ' + ext)
     const view = [
@@ -607,7 +639,7 @@ route('POST', '/api/open', async req => {
       ...view,
       'go()',
     ].join(String.fromCharCode(10))
-    if (await blenderExec(into)) return { ok: true, where: 'current' }
+    if ((await blenderExec(into)) !== null) return { ok: true, where: 'current' }
     // no Blender open: a new one with an empty scene
     const py = [
       'import bpy',
