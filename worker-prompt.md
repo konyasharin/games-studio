@@ -67,7 +67,9 @@ Add to every side prompt, by side (Russian):
 - back: «строго вид сзади, ровно со спины, ортографическая проекция, без поворота, не в три четверти»
 - left: «строго вид слева, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
 - right: «строго вид справа, чистый профиль под 90 градусов, ортографическая проекция, не в три четверти»
-and always: «та же поза, те же пропорции и детали, что на референсе, ничего не добавлять; светло-серый ровный
+Side `art` (logo, cover, key art): no side or orthographic wording and no grey-background rule; follow the card's
+prompt as the composition, use the inputs only as the character/style reference, post with `view=front`.
+For the other sides always: «та же поза, те же пропорции и детали, что на референсе, ничего не добавлять; светло-серый ровный
 фон, мягкий ровный свет, без теней, без текста, объект целиком в кадре». Run each image as its own generation.
 Speed matters, the author is waiting at the board:
 - Submit ALL the generations of the job back to back first (Flow runs them in parallel), then collect.

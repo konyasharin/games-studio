@@ -661,9 +661,31 @@ route('PATCH', '/api/projects/:pid', async (req, m) => {
   return withLock(f, async () => {
     const d = await readJSON(f, {})
     if (typeof patch.name === 'string') d.name = patch.name
+    if (patch.theme && typeof patch.theme === 'object') d.theme = cleanTheme(patch.theme)
+    if (patch.theme === null) delete d.theme
     if (Array.isArray(patch.sections)) d.sections = patch.sections.filter(s => s && /^[\w-]{1,40}$/.test(s.id)).map(s => ({ id: s.id, title: String(s.title || s.id), kind: s.kind === 'boards' ? 'boards' : 'notes' }))
     await writeJSON(f, d); return d
   })
+})
+// a project's look: colours (#hex), Google font names, a logo and a cover picture from the project folder
+const THEME_COLORS = ['bg', 'bg2', 'panel', 'panel2', 'line', 'line2', 'fg', 'muted', 'dim', 'accent', 'accent2']
+function cleanTheme(t) {
+  const out = { preset: String(t.preset || 'custom').slice(0, 30), colors: {} }
+  for (const k of THEME_COLORS) if (/^#[0-9a-fA-F]{6}$/.test(t.colors?.[k] || '')) out.colors[k] = t.colors[k]
+  for (const k of ['fontDisplay', 'fontBody']) if (/^[A-Za-z0-9 ]{2,40}$/.test(t[k] || '')) out[k] = t[k]
+  for (const k of ['logo', 'cover']) if (typeof t[k] === 'string' && inside(ROOT, path.resolve(ROOT, t[k])) && fs.existsSync(path.resolve(ROOT, t[k]))) out[k] = t[k]
+  if (typeof t.tagline === 'string') out.tagline = t.tagline.slice(0, 120)
+  if (typeof t.texture === 'boolean') out.texture = t.texture
+  return out
+}
+route('POST', '/api/projects/:pid/brand', async (req, m, url) => {
+  const p = await project(m.pid)
+  const name = safeName(url.searchParams.get('name') || 'image.png')
+  if (!/\.(png|jpe?g|webp|gif|svg)$/i.test(name)) throw httpError(400, 'нужна картинка')
+  const dir = path.join(projDir(p), 'brand'); await fsp.mkdir(dir, { recursive: true })
+  const f = path.join(dir, Date.now().toString(36) + '-' + name)
+  await fsp.writeFile(f, await readBody(req, 30 * 1024 * 1024)); backupSoon(f)
+  return { file: toRel(f) }
 })
 const notesFile = (p, sid) => path.join(projDir(p), 'notes', safeId(sid) + '.html')
 const mtimeOf = async f => (await fsp.stat(f).catch(() => null))?.mtimeMs || 0
@@ -925,7 +947,8 @@ route('POST', '/api/projects/:pid/boards/:bid/cards/:cid/generate', async (req, 
   if ([...jobs.values()].some(j => j.card === c.id && active(j))) throw httpError(409, 'уже в очереди')
   const kind = ['images', 'split', 'note', 'describe', 'tripo'].includes(opts.kind) ? opts.kind : c.type === 'split' ? 'split' : 'images'
   const SIDES = ['front', 'back', 'left', 'right']
-  const sides = (Array.isArray(opts.sides) ? opts.sides : c.sides || ['front']).filter(x => SIDES.includes(x))
+  // an art card (logo, cover, key art) is one free composition, not strict sides of an object
+  const sides = c.art ? ['art'] : (Array.isArray(opts.sides) ? opts.sides : c.sides || ['front']).filter(x => SIDES.includes(x))
   if (kind === 'images' && !sides.length) throw httpError(400, 'выбери хотя бы одну сторону')
   // the card's own chosen sides are references too: the front for the other sides, all of them for a description
   const own = kind === 'describe' ? [c.picks?.front || c.chosen, ...Object.values(c.picks || {})] : sides.some(x => x !== 'front') ? [c.picks?.front || c.chosen] : []

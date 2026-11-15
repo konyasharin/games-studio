@@ -1,5 +1,6 @@
 // Studio Board front end: projects -> sections -> boards with linked cards.
 import { initAssist } from '/assist.js'
+import { applyTheme, resetTheme, themePage } from '/theme.js'
 const $ = (s, el = document) => el.querySelector(s)
 const h = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag)
@@ -108,7 +109,11 @@ let navSeq = 0
 const stale = tok => tok !== navSeq
 function crumbs(items) {
   const c = $('#crumbs'); c.innerHTML = ''
-  items.forEach((it, i) => { if (i) c.append(h('span', { class: 'sep' }, '/')); c.append(it.href ? h('a', { href: it.href }, it.text) : h('span', { class: 'cur' }, it.text)) })
+  items.forEach((it, i) => {
+    if (i) c.append(h('span', { class: 'sep' }, '/'))
+    const logo = it.logo ? h('img', { class: 'crumb-logo', src: fileUrl(it.logo), alt: '' }) : null
+    c.append(it.href ? h('a', { href: it.href }, logo, it.text) : h('span', { class: 'cur' }, logo, it.text))
+  })
 }
 async function route() {
   current?.stop?.(); current = null
@@ -132,6 +137,7 @@ async function homePage(view, tok) {
   const list = await api('GET', '/api/projects')
   if (stale(tok)) return
   crumbs([{ text: 'Проекты' }])
+  resetTheme()
   ctxNow = { kind: 'home' }
   const page = h('div', { class: 'page' }, h('h1', {}, 'Проекты'), h('p', { class: 'sub' }, 'Игры и всё, что к ним относится: сюжет, 3D, звук. Данные лежат в папке проекта и переживают перезапуск.'))
   const grid = h('div', { class: 'grid' })
@@ -151,19 +157,26 @@ async function homePage(view, tok) {
 async function projectPage(view, pid, sid, tok) {
   const p = await api('GET', `/api/projects/${pid}`)
   if (stale(tok)) return
-  const sec = p.sections.find(s => s.id === sid) || p.sections[0]
-  crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir }])
-  const side = h('aside', { class: 'side' }, h('h3', {}, 'Разделы'),
+  applyTheme(p.theme)
+  const sec = sid === 'theme' ? { id: 'theme', title: 'Оформление', kind: 'theme' } : p.sections.find(s => s.id === sid) || p.sections[0]
+  crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir, logo: p.theme?.logo }])
+  const T = p.theme || {}
+  const cover = T.cover ? h('a', { class: 'side-cover', href: `#/p/${pid}/${p.sections[0]?.id || '3d'}`, style: { backgroundImage: `url("${fileUrl(T.cover)}")` } },
+    h('span', { class: 'sc-title' }, p.name || p.dir), T.tagline ? h('span', { class: 'sc-tag' }, T.tagline) : null) : null
+  const side = h('aside', { class: 'side' }, cover, h('h3', {}, 'Разделы'),
     ...p.sections.map(s => h('a', { href: `#/p/${pid}/${s.id}`, class: s.id === sec.id ? 'cur' : '' }, s.title)),
     h('a', { href: 'javascript:void 0', onclick: async () => {
       const v = await prompt2('Новый раздел', [{ key: 'title', label: 'Название' }, { key: 'kind', label: 'Тип', options: [['notes', 'Страница (текст)'], ['boards', 'Доски (как 3D)']] }])
       if (!v?.title) return
       const sections = [...p.sections, { id: 's' + Date.now().toString(36), title: v.title, kind: v.kind }]
       await api('PATCH', `/api/projects/${pid}`, { sections }); route()
-    } }, '+ раздел'))
+    } }, '+ раздел'),
+    h('h3', { class: 'side-gap' }, 'Проект'),
+    h('a', { href: `#/p/${pid}/theme`, class: sec.id === 'theme' ? 'cur' : '' }, '🎨 Оформление'))
   const main = h('div', { class: 'proj-main' })
   view.append(h('div', { class: 'proj' }, side, main))
   ctxNow = sec.kind === 'boards' ? { pid: p.id, kind: 'page' } : { pid: p.id, kind: 'notes', section: sec.id, sectionTitle: sec.title }
+  if (sec.kind === 'theme') { ctxNow = { pid: p.id, kind: 'page' }; themePage(main, p, { api, h, toast, fileUrl, onSaved: () => {} }); return {} }
   if (sec.kind === 'boards') return boardsList(main, p, sec)
   return notesPage(main, p, sec, tok)
 }
@@ -231,8 +244,9 @@ async function boardPage(view, pid, bid, tok) {
   const p = await api('GET', `/api/projects/${pid}`)
   let B = await api('GET', `/api/projects/${pid}/boards/${bid}`)
   if (stale(tok)) return
+  applyTheme(p.theme)
   const sec = p.sections.find(s => s.id === (p.boards.find(b => b.id === bid)?.section || '3d'))
-  crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir, href: `#/p/${pid}/${sec?.id || '3d'}` }, { text: B.name }])
+  crumbs([{ text: 'Проекты', href: '#/' }, { text: p.name || p.dir, logo: p.theme?.logo, href: `#/p/${pid}/${sec?.id || '3d'}` }, { text: B.name }])
   const base = `/api/projects/${pid}/boards/${bid}`
   ctxNow = { pid, kind: 'board', board: bid, boardName: B.name, cards: () => B.cards, world: () => world, toWorld: e => toWorld(e) }
   const el = h('div', { class: 'board' }); view.append(el)
